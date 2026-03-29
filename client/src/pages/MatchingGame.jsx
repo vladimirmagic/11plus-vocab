@@ -152,11 +152,11 @@ export default function MatchingGame() {
           </button>
           {categories.map(cat => (
             <button
-              key={cat}
-              className={`category-pill${category === cat ? ' active' : ''}`}
-              onClick={() => setCategory(cat)}
+              key={cat.category || cat}
+              className={`category-pill${category === (cat.category || cat) ? ' active' : ''}`}
+              onClick={() => setCategory(cat.category || cat)}
             >
-              {cat}
+              {cat.category || cat}
             </button>
           ))}
         </div>

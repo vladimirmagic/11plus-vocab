@@ -104,7 +104,7 @@ function Dashboard({ onNavigate }) {
         <div className="progress-bar">
           <div
             className="progress-bar-fill"
-            style={{ width: `${masteredPercent}%` }}
+            style={{ width: `${masteredPercent}%`, background: 'var(--green)' }}
           />
         </div>
         <p style={{ textAlign: 'center', marginTop: '0.5rem', color: '#555' }}>
@@ -115,17 +115,17 @@ function Dashboard({ onNavigate }) {
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h3 style={{ marginBottom: '1rem' }}>🎮 What would you like to do?</h3>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem' }}>
-          <button className="btn-primary" onClick={() => onNavigate('practice')}>
-            📝 Practice Words
-          </button>
-          <button className="btn-primary" onClick={() => onNavigate('quiz')}>
-            🧠 Take a Quiz
-          </button>
           <button className="btn-primary" onClick={() => onNavigate('words')}>
             📚 Browse Words
           </button>
-          <button className="btn-primary" onClick={() => onNavigate('stories')}>
-            📖 Word Stories
+          <button className="btn-primary" onClick={() => onNavigate('matching')}>
+            🎯 Matching Game
+          </button>
+          <button className="btn-primary" onClick={() => onNavigate('sentences')}>
+            ✍️ Sentence Builder
+          </button>
+          <button className="btn-primary" onClick={() => onNavigate('clusters')}>
+            🕸️ Word Clusters
           </button>
         </div>
       </div>

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
 
-const CATEGORIES = ['adjective', 'noun', 'verb', 'adverb', 'phrase', 'other'];
+const CATEGORIES = ['adjectives', 'verbs', 'nouns', 'adverbs', 'emotions', 'character', 'academic', 'nature', 'relationships'];
 
 const emptyForm = {
   word: '',

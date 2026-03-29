@@ -65,9 +65,9 @@ export default function WordList() {
   async function updateProgress(wordId, status) {
     if (!user) return;
     try {
-      await apiFetch('/progress', {
-        method: 'POST',
-        body: { word_id: wordId, status },
+      await apiFetch(`/progress/${wordId}`, {
+        method: 'PUT',
+        body: { status },
       });
       setProgress(prev => ({ ...prev, [wordId]: status }));
     } catch (err) {
@@ -108,11 +108,11 @@ export default function WordList() {
         </button>
         {categories.map(cat => (
           <button
-            key={cat}
-            className={`category-pill${category === cat ? ' active' : ''}`}
-            onClick={() => setCategory(cat)}
+            key={cat.category || cat}
+            className={`category-pill${category === (cat.category || cat) ? ' active' : ''}`}
+            onClick={() => setCategory(cat.category || cat)}
           >
-            {cat}
+            {cat.category || cat} {cat.count ? `(${cat.count})` : ''}
           </button>
         ))}
       </div>
@@ -162,10 +162,10 @@ export default function WordList() {
               </div>
             )}
 
-            {selectedWord.teachers_tip && (
-              <div className="word-detail-section teachers-tip">
-                <h3>Teacher's Tip</h3>
-                <p>{selectedWord.teachers_tip}</p>
+            {selectedWord.teacher_tip && (
+              <div className="word-detail-section" style={{ background: 'var(--cream)', padding: '12px', borderRadius: '8px' }}>
+                <h3>Teacher's Tip 💡</h3>
+                <p>{selectedWord.teacher_tip}</p>
               </div>
             )}
 

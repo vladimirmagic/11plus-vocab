@@ -588,6 +588,49 @@ input:focus, textarea:focus, select:focus {
 .empty-state .empty-icon { font-size: 48px; margin-bottom: 12px; }
 .empty-state h3 { color: var(--text); margin-bottom: 8px; }
 
+/* Word card in grid */
+.word-grid .card {
+  cursor: pointer;
+  transition: all 0.2s;
+  padding: 16px;
+}
+
+.word-grid .card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.card-emoji { font-size: 32px; margin-bottom: 6px; }
+.card-word { font-size: 16px; font-weight: 800; color: var(--text); margin-bottom: 4px; }
+.card-definition { font-size: 13px; color: var(--text-light); margin-bottom: 10px; line-height: 1.4; }
+.card-footer { display: flex; justify-content: space-between; align-items: center; }
+.card-category { font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 700; }
+
+.word-detail-section h3 {
+  font-size: 12px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.progress-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.progress-buttons h3 {
+  width: 100%;
+}
+
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 /* Word detail modal */
 .modal-overlay {
   position: fixed;
