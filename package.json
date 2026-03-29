@@ -1,0 +1,17 @@
+{
+  "name": "11plus-vocab",
+  "version": "1.0.0",
+  "description": "11 Plus Vocabulary Trainer",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "cd server && npm run dev",
+    "dev:client": "cd client && npm run dev",
+    "build": "cd client && npm install && npm run build",
+    "start": "cd server && node index.js",
+    "install:all": "cd server && npm install && cd ../client && npm install"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
