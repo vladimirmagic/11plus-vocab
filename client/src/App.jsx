@@ -8,14 +8,14 @@ import SentenceBuilder from './pages/SentenceBuilder.jsx';
 import AdminPanel from './pages/AdminPanel.jsx';
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard', icon: '\ud83c\udfe0' },
-  { id: 'words', label: 'Word List', icon: '\ud83d\udcda' },
-  { id: 'clusters', label: 'Word Clusters', icon: '\ud83d\udd78\ufe0f' },
-  { id: 'matching', label: 'Matching Game', icon: '\ud83c\udfaf' },
-  { id: 'sentences', label: 'Sentence Builder', icon: '\u270d\ufe0f' },
+  { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
+  { id: 'words', label: 'Word List', icon: '📚' },
+  { id: 'clusters', label: 'Word Clusters', icon: '🕸️' },
+  { id: 'matching', label: 'Matching Game', icon: '🎯' },
+  { id: 'sentences', label: 'Sentence Builder', icon: '✍️' },
 ];
 
-const ADMIN_NAV = { id: 'admin', label: 'Admin Panel', icon: '\u2699\ufe0f' };
+const ADMIN_NAV = { id: 'admin', label: 'Admin Panel', icon: '⚙️' };
 
 export default function App() {
   const { user, loading, login, logout } = useAuth();
@@ -81,21 +81,21 @@ export default function App() {
   if (!user) {
     return (
       <div className="login-screen">
-        <h1>\ud83d\udcdd 11 Plus Vocab</h1>
+        <h1>📝 11 Plus Vocab</h1>
         <p className="tagline">Master vocabulary for your 11 Plus exam with fun, interactive learning</p>
         <div className="features">
           <div className="feature-card">
-            <div className="feature-icon">\ud83d\udcda</div>
+            <div className="feature-icon">📚</div>
             <h3>Word Library</h3>
             <p>Explore hundreds of important vocabulary words with clear definitions</p>
           </div>
           <div className="feature-card">
-            <div className="feature-icon">\ud83c\udfaf</div>
+            <div className="feature-icon">🎯</div>
             <h3>Matching Game</h3>
             <p>Test your knowledge by matching words to their meanings</p>
           </div>
           <div className="feature-card">
-            <div className="feature-icon">\u270d\ufe0f</div>
+            <div className="feature-icon">✍️</div>
             <h3>Sentence Builder</h3>
             <p>Practice using words in sentences with AI feedback</p>
           </div>
@@ -124,9 +124,9 @@ export default function App() {
       {/* Mobile header */}
       <div className="mobile-header">
         <button className="hamburger" onClick={() => setSidebarOpen(!sidebarOpen)}>
-          {sidebarOpen ? '\u2715' : '\u2630'}
+          {sidebarOpen ? '✕' : '☰'}
         </button>
-        <span style={{ fontWeight: 800, color: 'var(--green-dark)', fontSize: 16 }}>\ud83d\udcdd 11+ Vocab</span>
+        <span style={{ fontWeight: 800, color: 'var(--green-dark)', fontSize: 16 }}>📝 11+ Vocab</span>
         <img
           className="user-avatar"
           src={user.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=6B9E7A&color=fff`}
@@ -140,7 +140,7 @@ export default function App() {
       {/* Sidebar */}
       <nav className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
-          <h1>\ud83d\udcdd 11 Plus Vocab</h1>
+          <h1>📝 11 Plus Vocab</h1>
           <div className="subtitle">Vocabulary Trainer</div>
         </div>
 
