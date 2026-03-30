@@ -8,15 +8,41 @@ export default function WordDetail({ wordId, onNavigate }) {
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(null);
   const [favoriteAnchor, setFavoriteAnchor] = useState(null);
+  const [anchors, setAnchors] = useState([]);
+  const [imagesLoading, setImagesLoading] = useState(false);
+  const [imageErrors, setImageErrors] = useState({});
 
+  // Load word
   useEffect(() => {
     setLoading(true);
+    setAnchors([]);
+    setImageErrors({});
     apiFetch(`/words/${wordId}`)
-      .then(data => setWord(data.word || data))
+      .then(data => {
+        const w = data.word || data;
+        setWord(w);
+        setAnchors(Array.isArray(w.visual_anchors) ? w.visual_anchors : []);
+      })
       .catch(() => setWord(null))
       .finally(() => setLoading(false));
   }, [wordId]);
 
+  // Generate images if not cached
+  useEffect(() => {
+    if (!word || anchors.length === 0) return;
+    if (anchors[0].image_url) return; // Already have images
+
+    setImagesLoading(true);
+    apiFetch(`/words/${wordId}/generate-images`, { method: 'POST' })
+      .then(data => {
+        const updated = data.visual_anchors || [];
+        setAnchors(updated);
+      })
+      .catch(() => {}) // Fail silently - emoji fallback
+      .finally(() => setImagesLoading(false));
+  }, [word, anchors.length, wordId]);
+
+  // Load user progress + favorite
   useEffect(() => {
     if (!user || !wordId) return;
     apiFetch('/progress')
@@ -24,7 +50,12 @@ export default function WordDetail({ wordId, onNavigate }) {
         const items = data.progress || data;
         if (Array.isArray(items)) {
           const found = items.find(p => p.word_id === wordId);
-          if (found) setProgress(found.status);
+          if (found) {
+            setProgress(found.status);
+            if (found.favorite_anchor !== null && found.favorite_anchor !== undefined) {
+              setFavoriteAnchor(found.favorite_anchor);
+            }
+          }
         }
       })
       .catch(() => {});
@@ -40,17 +71,26 @@ export default function WordDetail({ wordId, onNavigate }) {
     }
   }
 
+  async function handleFavorite(idx) {
+    setFavoriteAnchor(idx);
+    if (!user) return;
+    try {
+      await apiFetch(`/progress/${wordId}/favorite`, { method: 'PUT', body: { anchor: idx } });
+    } catch (err) {
+      console.error('Failed to save favorite:', err);
+    }
+  }
+
+  function handleImageError(idx) {
+    setImageErrors(prev => ({ ...prev, [idx]: true }));
+  }
+
   function handleSynonymClick(syn) {
     onNavigate('words', syn);
   }
 
   if (loading) {
-    return (
-      <div className="loading">
-        <div className="spinner"></div>
-        Loading word...
-      </div>
-    );
+    return <div className="loading"><div className="spinner"></div>Loading word...</div>;
   }
 
   if (!word) {
@@ -62,8 +102,6 @@ export default function WordDetail({ wordId, onNavigate }) {
       </div>
     );
   }
-
-  const anchors = Array.isArray(word.visual_anchors) ? word.visual_anchors : [];
 
   return (
     <div className="word-detail-page">
@@ -88,18 +126,16 @@ export default function WordDetail({ wordId, onNavigate }) {
         )}
       </div>
 
-      {/* Main content - 2 column on desktop */}
+      {/* Main content */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: 20 }}>
 
         {/* Left column */}
         <div>
-          {/* Definition */}
           <div className="card" style={{ marginBottom: 16 }}>
             <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Definition</h3>
             <p style={{ fontSize: 18, lineHeight: 1.6 }}>{word.definition}</p>
           </div>
 
-          {/* Example Sentence */}
           {word.example_sentence && (
             <div className="card" style={{ marginBottom: 16 }}>
               <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Example Sentence</h3>
@@ -109,7 +145,6 @@ export default function WordDetail({ wordId, onNavigate }) {
             </div>
           )}
 
-          {/* Teacher's Tip */}
           {word.teacher_tip && (
             <div className="card" style={{ marginBottom: 16, background: 'var(--cream)', borderLeft: '4px solid var(--orange)' }}>
               <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--orange)', fontWeight: 700, marginBottom: 8 }}>Teacher's Tip</h3>
@@ -117,15 +152,12 @@ export default function WordDetail({ wordId, onNavigate }) {
             </div>
           )}
 
-          {/* Synonyms & Antonyms */}
           {word.synonyms && word.synonyms.length > 0 && (
             <div className="card" style={{ marginBottom: 16 }}>
               <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Synonyms (similar words)</h3>
               <div className="tag-list">
                 {word.synonyms.map((syn, idx) => (
-                  <span key={idx} className="synonym-tag" onClick={() => handleSynonymClick(syn)}>
-                    {syn}
-                  </span>
+                  <span key={idx} className="synonym-tag" onClick={() => handleSynonymClick(syn)}>{syn}</span>
                 ))}
               </div>
             </div>
@@ -136,9 +168,7 @@ export default function WordDetail({ wordId, onNavigate }) {
               <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Antonyms (opposite words)</h3>
               <div className="tag-list">
                 {word.antonyms.map((ant, idx) => (
-                  <span key={idx} className="antonym-tag" onClick={() => handleSynonymClick(ant)}>
-                    {ant}
-                  </span>
+                  <span key={idx} className="antonym-tag" onClick={() => handleSynonymClick(ant)}>{ant}</span>
                 ))}
               </div>
             </div>
@@ -147,31 +177,63 @@ export default function WordDetail({ wordId, onNavigate }) {
 
         {/* Right column */}
         <div>
-          {/* Visual Anchors */}
+          {/* Visual Anchors with Images */}
           {anchors.length > 0 && (
             <div className="card" style={{ marginBottom: 16 }}>
               <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 12 }}>Visual Anchors</h3>
               <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>Pick the image that helps you remember this word best!</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+              {imagesLoading && (
+                <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>
+                  <div className="spinner" style={{ margin: '0 auto 8px' }}></div>
+                  <p style={{ fontSize: 13 }}>Generating illustrations...</p>
+                </div>
+              )}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {anchors.map((anchor, idx) => (
                   <div
                     key={idx}
-                    className={`anchor-card${favoriteAnchor === idx ? ' selected' : ''}`}
-                    onClick={() => setFavoriteAnchor(idx)}
+                    onClick={() => handleFavorite(idx)}
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 12,
-                      padding: 14,
-                      background: favoriteAnchor === idx ? '#E8F5EC' : 'var(--cream)',
-                      borderRadius: 10,
+                      borderRadius: 12,
+                      overflow: 'hidden',
                       cursor: 'pointer',
-                      border: favoriteAnchor === idx ? '2px solid var(--green)' : '2px solid transparent',
+                      border: favoriteAnchor === idx ? '3px solid var(--green)' : '3px solid transparent',
+                      background: favoriteAnchor === idx ? '#E8F5EC' : 'var(--cream)',
                       transition: 'all 0.2s',
+                      boxShadow: favoriteAnchor === idx ? '0 4px 12px rgba(107, 158, 122, 0.3)' : 'none',
                     }}
                   >
-                    <span style={{ fontSize: 36, flexShrink: 0 }}>{anchor.emoji}</span>
-                    <span style={{ fontSize: 14, lineHeight: 1.5 }}>{anchor.scene}</span>
+                    {/* Image */}
+                    {anchor.image_url && !imageErrors[idx] && (
+                      <img
+                        src={anchor.image_url}
+                        alt={anchor.scene}
+                        loading="lazy"
+                        onError={() => handleImageError(idx)}
+                        style={{
+                          width: '100%',
+                          height: 200,
+                          objectFit: 'cover',
+                          display: 'block',
+                        }}
+                      />
+                    )}
+
+                    {/* Emoji + text fallback or supplement */}
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 10,
+                      padding: '10px 14px',
+                    }}>
+                      <span style={{ fontSize: 28, flexShrink: 0 }}>{anchor.emoji}</span>
+                      <span style={{ fontSize: 13, lineHeight: 1.4, flex: 1 }}>{anchor.scene}</span>
+                      {favoriteAnchor === idx && (
+                        <span style={{ fontSize: 20, flexShrink: 0 }} title="Your favourite">⭐</span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -184,7 +246,7 @@ export default function WordDetail({ wordId, onNavigate }) {
               <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 12 }}>Your Progress</h3>
               <div style={{ display: 'flex', gap: 8 }}>
                 <button
-                  className={progress === 'new' || !progress ? 'btn-secondary' : 'btn-secondary'}
+                  className="btn-secondary"
                   onClick={() => updateProgress('new')}
                   style={{ flex: 1, opacity: progress === 'new' || !progress ? 1 : 0.5 }}
                 >

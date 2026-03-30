@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS progress (
   status VARCHAR(20) NOT NULL DEFAULT 'new',
   times_practiced INTEGER NOT NULL DEFAULT 0,
   last_practiced TIMESTAMPTZ,
+  favorite_anchor INTEGER,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   UNIQUE(user_id, word_id)
 );
@@ -46,3 +47,9 @@ CREATE INDEX IF NOT EXISTS idx_progress_user ON progress(user_id);
 CREATE INDEX IF NOT EXISTS idx_progress_word ON progress(word_id);
 CREATE INDEX IF NOT EXISTS idx_words_category ON words(category);
 CREATE INDEX IF NOT EXISTS idx_words_approved ON words(approved);
+
+-- Migration: add favorite_anchor if missing
+DO $$ BEGIN
+  ALTER TABLE progress ADD COLUMN favorite_anchor INTEGER;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;

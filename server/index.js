@@ -338,6 +338,61 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, uploadHandler.sin
   }
 });
 
+// ── Image Generation for Visual Anchors ──
+app.post('/api/words/:id/generate-images', async (req, res) => {
+  try {
+    const wordResult = await pool.query('SELECT * FROM words WHERE id = $1 AND approved = true', [req.params.id]);
+    if (wordResult.rows.length === 0) return res.status(404).json({ error: 'Word not found' });
+
+    const word = wordResult.rows[0];
+    let anchors = Array.isArray(word.visual_anchors) ? word.visual_anchors : [];
+
+    // Already generated? Return cached
+    if (anchors.length > 0 && anchors[0].image_url) {
+      return res.json({ word: word.word, visual_anchors: anchors });
+    }
+
+    // Generate Pollinations URLs for each anchor scene
+    anchors = anchors.map((anchor, idx) => {
+      const prompt = `Children's book illustration, watercolor style, colorful, friendly, no text: ${anchor.scene}`;
+      const encodedPrompt = encodeURIComponent(prompt);
+      const seed = word.id * 10 + idx;
+      return {
+        ...anchor,
+        image_url: `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&nologo=true&seed=${seed}`,
+      };
+    });
+
+    // Save back to DB
+    await pool.query('UPDATE words SET visual_anchors = $1 WHERE id = $2', [JSON.stringify(anchors), word.id]);
+
+    res.json({ word: word.word, visual_anchors: anchors });
+  } catch (err) {
+    console.error('Generate images error:', err);
+    res.status(500).json({ error: 'Failed to generate images' });
+  }
+});
+
+// ── Save Favorite Anchor ──
+app.put('/api/progress/:wordId/favorite', authMiddleware, async (req, res) => {
+  try {
+    const { anchor } = req.body;
+    if (anchor === undefined || anchor < 0 || anchor > 2) return res.status(400).json({ error: 'anchor must be 0, 1, or 2' });
+
+    const result = await pool.query(`
+      INSERT INTO progress (user_id, word_id, status, times_practiced, favorite_anchor)
+      VALUES ($1, $2, 'new', 0, $3)
+      ON CONFLICT (user_id, word_id) DO UPDATE SET favorite_anchor = $3
+      RETURNING *
+    `, [req.user.userId, req.params.wordId, anchor]);
+
+    res.json({ progress: result.rows[0] });
+  } catch (err) {
+    console.error('Save favorite error:', err);
+    res.status(500).json({ error: 'Failed to save favorite' });
+  }
+});
+
 // Seed endpoint (one-time use)
 app.post('/api/seed', async (req, res) => {
   try {
