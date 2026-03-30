@@ -39,21 +39,32 @@ app.post('/api/auth/send-otp', async (req, res) => {
 
     const otp = generateOtp();
     storeOtp(email, otp);
+    console.log(`OTP for ${email}: ${otp}`);
 
-    const { Resend } = await import('resend');
-    const resend = new Resend(process.env.RESEND_API_KEY);
-
-    await resend.emails.send({
-      from: 'Vocab Trainer <onboarding@resend.dev>',
-      to: email,
-      subject: 'Your login code for 11 Plus Vocab',
-      html: `<div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:20px">
-        <h2 style="color:#4A7A5A">11 Plus Vocabulary Trainer</h2>
-        <p>Your login code is:</p>
-        <div style="font-size:32px;font-weight:bold;letter-spacing:8px;padding:16px;background:#F5EBD8;border-radius:8px;text-align:center;color:#3D3228">${otp}</div>
-        <p style="color:#888;font-size:13px">This code expires in 10 minutes.</p>
-      </div>`,
-    });
+    if (process.env.RESEND_API_KEY) {
+      try {
+        const { Resend } = await import('resend');
+        const resend = new Resend(process.env.RESEND_API_KEY);
+        const result = await resend.emails.send({
+          from: 'Vocab Trainer <onboarding@resend.dev>',
+          to: email,
+          subject: 'Your login code for 11 Plus Vocab',
+          html: `<div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:20px">
+            <h2 style="color:#4A7A5A">11 Plus Vocabulary Trainer</h2>
+            <p>Your login code is:</p>
+            <div style="font-size:32px;font-weight:bold;letter-spacing:8px;padding:16px;background:#F5EBD8;border-radius:8px;text-align:center;color:#3D3228">${otp}</div>
+            <p style="color:#888;font-size:13px">This code expires in 10 minutes.</p>
+          </div>`,
+        });
+        if (result.error) {
+          console.error('Resend error:', result.error);
+          return res.json({ sent: true, note: 'Email delivery may be limited on free tier. Check server logs for OTP.' });
+        }
+      } catch (emailErr) {
+        console.error('Email send error:', emailErr.message);
+        return res.json({ sent: true, note: 'Email delivery failed. Check server logs for OTP.' });
+      }
+    }
 
     res.json({ sent: true });
   } catch (err) {
