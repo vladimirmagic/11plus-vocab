@@ -7,6 +7,7 @@ import WordClusters from './pages/WordClusters.jsx';
 import MatchingGame from './pages/MatchingGame.jsx';
 import SentenceBuilder from './pages/SentenceBuilder.jsx';
 import AdminPanel from './pages/AdminPanel.jsx';
+import Settings from './pages/Settings.jsx';
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
@@ -14,6 +15,7 @@ const NAV_ITEMS = [
   { id: 'clusters', label: 'Word Clusters', icon: '🕸️' },
   { id: 'matching', label: 'Matching Game', icon: '🎯' },
   { id: 'sentences', label: 'Sentence Builder', icon: '✍️' },
+  { id: 'settings', label: 'Settings', icon: '🔧' },
 ];
 
 const ADMIN_NAV = { id: 'admin', label: 'Admin Panel', icon: '⚙️' };
@@ -117,6 +119,7 @@ export default function App() {
       case 'clusters': return <WordClusters />;
       case 'matching': return <MatchingGame />;
       case 'sentences': return <SentenceBuilder />;
+      case 'settings': return <Settings />;
       case 'admin': return user.role === 'admin' ? <AdminPanel /> : <Dashboard onNavigate={handleNavigate} />;
       default: return <Dashboard onNavigate={handleNavigate} />;
     }

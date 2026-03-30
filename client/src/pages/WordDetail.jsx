@@ -5,6 +5,7 @@ import { useAuth } from '../AuthContext.jsx';
 let currentAudio = null;
 
 function SpeakButton({ text }) {
+  const { user } = useAuth();
   const [speaking, setSpeaking] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -22,7 +23,7 @@ function SpeakButton({ text }) {
       const res = await fetch('/api/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, voice: user?.voice_preference }),
       });
       const data = await res.json();
       if (!data.audio) throw new Error('No audio');

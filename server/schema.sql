@@ -54,6 +54,12 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
 
+-- Migration: add voice_preference to users
+DO $$ BEGIN
+  ALTER TABLE users ADD COLUMN voice_preference VARCHAR(100);
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
+
 -- Migration: add quotes column to words
 DO $$ BEGIN
   ALTER TABLE words ADD COLUMN quotes JSONB DEFAULT '[]';

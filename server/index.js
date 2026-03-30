@@ -46,7 +46,7 @@ app.post('/api/auth/login', async (req, res) => {
 
     const user = result.rows[0];
     const token = generateJwt(user);
-    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar_url: user.avatar_url, role: user.role } });
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar_url: user.avatar_url, role: user.role, voice_preference: user.voice_preference } });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Login failed' });
@@ -55,11 +55,21 @@ app.post('/api/auth/login', async (req, res) => {
 
 app.get('/api/auth/me', authMiddleware, async (req, res) => {
   try {
-    const result = await pool.query('SELECT id, email, name, avatar_url, role FROM users WHERE id = $1', [req.user.userId]);
+    const result = await pool.query('SELECT id, email, name, avatar_url, role, voice_preference FROM users WHERE id = $1', [req.user.userId]);
     if (result.rows.length === 0) return res.status(404).json({ error: 'User not found' });
     res.json({ user: result.rows[0] });
   } catch (err) {
     res.status(500).json({ error: 'Failed to get user' });
+  }
+});
+
+app.put('/api/auth/voice', authMiddleware, async (req, res) => {
+  try {
+    const { voice } = req.body;
+    await pool.query('UPDATE users SET voice_preference = $1 WHERE id = $2', [voice || null, req.user.userId]);
+    res.json({ voice_preference: voice });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save voice preference' });
   }
 });
 
@@ -464,20 +474,57 @@ Respond as JSON array:
 });
 
 // ── Text-to-Speech via Google Cloud ──
+let cachedVoices = null;
+
+app.get('/api/tts/voices', async (req, res) => {
+  try {
+    if (cachedVoices) return res.json({ voices: cachedVoices });
+
+    const apiKey = process.env.GOOGLE_TTS_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'TTS not configured' });
+
+    const response = await fetch(`https://texttospeech.googleapis.com/v1/voices?key=${apiKey}&languageCode=en`);
+    if (!response.ok) return res.status(500).json({ error: 'Failed to fetch voices' });
+
+    const data = await response.json();
+    const voices = (data.voices || [])
+      .filter(v => v.languageCodes.some(lc => lc.startsWith('en-')))
+      .map(v => ({
+        name: v.name,
+        gender: v.ssmlGender,
+        language: v.languageCodes[0],
+        type: v.name.includes('Wavenet') ? 'Wavenet' : v.name.includes('Neural2') ? 'Neural2' : v.name.includes('Studio') ? 'Studio' : v.name.includes('Journey') ? 'Journey' : 'Standard',
+      }))
+      .sort((a, b) => {
+        const typeOrder = { Journey: 0, Studio: 1, Neural2: 2, Wavenet: 3, Standard: 4 };
+        return (typeOrder[a.type] ?? 5) - (typeOrder[b.type] ?? 5) || a.name.localeCompare(b.name);
+      });
+
+    cachedVoices = voices;
+    res.json({ voices });
+  } catch (err) {
+    console.error('Voices error:', err);
+    res.status(500).json({ error: 'Failed to fetch voices' });
+  }
+});
+
 app.post('/api/tts', async (req, res) => {
   try {
-    const { text } = req.body;
+    const { text, voice } = req.body;
     if (!text || text.length > 500) return res.status(400).json({ error: 'Text required (max 500 chars)' });
 
     const apiKey = process.env.GOOGLE_TTS_API_KEY;
     if (!apiKey) return res.status(503).json({ error: 'TTS not configured' });
+
+    const voiceName = voice || 'en-GB-Wavenet-B';
+    const langCode = voiceName.split('-').slice(0, 2).join('-');
 
     const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         input: { text },
-        voice: { languageCode: 'en-GB', name: 'en-GB-Wavenet-B' },
+        voice: { languageCode: langCode, name: voiceName },
         audioConfig: { audioEncoding: 'MP3', speakingRate: 0.9 },
       }),
     });
