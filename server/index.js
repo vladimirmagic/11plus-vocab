@@ -7,7 +7,7 @@ import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import pool from './db.js';
 import { initDatabase } from './init-db.js';
-import { verifyGoogleToken, generateJwt, authMiddleware, adminMiddleware } from './auth.js';
+import { generateOtp, storeOtp, verifyOtp, generateJwt, authMiddleware, adminMiddleware } from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '.env'), override: true });
@@ -31,25 +31,59 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// ── Auth ──
-app.post('/api/auth/google', async (req, res) => {
+// ── Auth (Email OTP) ──
+app.post('/api/auth/send-otp', async (req, res) => {
   try {
-    const { idToken } = req.body;
-    if (!idToken) return res.status(400).json({ error: 'idToken required' });
-    const gUser = await verifyGoogleToken(idToken);
+    const { email } = req.body;
+    if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
+
+    const otp = generateOtp();
+    storeOtp(email, otp);
+
+    const { Resend } = await import('resend');
+    const resend = new Resend(process.env.RESEND_API_KEY);
+
+    await resend.emails.send({
+      from: 'Vocab Trainer <onboarding@resend.dev>',
+      to: email,
+      subject: 'Your login code for 11 Plus Vocab',
+      html: `<div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:20px">
+        <h2 style="color:#4A7A5A">11 Plus Vocabulary Trainer</h2>
+        <p>Your login code is:</p>
+        <div style="font-size:32px;font-weight:bold;letter-spacing:8px;padding:16px;background:#F5EBD8;border-radius:8px;text-align:center;color:#3D3228">${otp}</div>
+        <p style="color:#888;font-size:13px">This code expires in 10 minutes.</p>
+      </div>`,
+    });
+
+    res.json({ sent: true });
+  } catch (err) {
+    console.error('Send OTP error:', err);
+    res.status(500).json({ error: 'Failed to send code' });
+  }
+});
+
+app.post('/api/auth/verify-otp', async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    if (!email || !otp) return res.status(400).json({ error: 'Email and code required' });
+
+    if (!verifyOtp(email, otp)) {
+      return res.status(401).json({ error: 'Invalid or expired code' });
+    }
+
     const result = await pool.query(`
-      INSERT INTO users (google_id, email, name, avatar_url)
-      VALUES ($1, $2, $3, $4)
-      ON CONFLICT (google_id) DO UPDATE SET
-        email = EXCLUDED.email, name = EXCLUDED.name, avatar_url = EXCLUDED.avatar_url
-      RETURNING id, google_id, email, name, avatar_url, role
-    `, [gUser.googleId, gUser.email, gUser.name, gUser.picture]);
+      INSERT INTO users (email, name)
+      VALUES ($1, $2)
+      ON CONFLICT (email) DO UPDATE SET name = users.name
+      RETURNING id, email, name, avatar_url, role
+    `, [email.toLowerCase(), email.split('@')[0]]);
+
     const user = result.rows[0];
     const token = generateJwt(user);
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, avatar_url: user.avatar_url, role: user.role } });
   } catch (err) {
-    console.error('Auth error:', err);
-    res.status(500).json({ error: 'Authentication failed' });
+    console.error('Verify OTP error:', err);
+    res.status(500).json({ error: 'Verification failed' });
   }
 });
 

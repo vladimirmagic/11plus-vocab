@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getToken, setToken, clearToken } from './api.js';
+import { getToken, setToken, clearToken, apiFetch } from './api.js';
 
 const AuthContext = createContext(null);
 
@@ -17,17 +17,25 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const login = useCallback(async (googleIdToken) => {
-    const r = await fetch('/api/auth/google', {
+  const sendOtp = useCallback(async (email) => {
+    const r = await fetch('/api/auth/send-otp', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ idToken: googleIdToken }),
+      body: JSON.stringify({ email }),
     });
-    if (!r.ok) {
-      const err = await r.json().catch(() => ({ error: 'Login failed' }));
-      throw new Error(err.error);
-    }
     const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Failed to send code');
+    return data;
+  }, []);
+
+  const verifyOtp = useCallback(async (email, otp) => {
+    const r = await fetch('/api/auth/verify-otp', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, otp }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || 'Verification failed');
     setToken(data.token);
     setTokenState(data.token);
     setUser(data.user);
@@ -41,7 +49,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, sendOtp, verifyOtp, logout }}>
       {children}
     </AuthContext.Provider>
   );

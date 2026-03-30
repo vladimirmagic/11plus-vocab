@@ -1,5 +1,5 @@
-import { OAuth2Client } from 'google-auth-library';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -7,25 +7,33 @@ import { dirname, join } from 'path';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '.env'), override: true });
 
-const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const JWT_EXPIRY = '7d';
 
-const oauthClient = GOOGLE_CLIENT_ID ? new OAuth2Client(GOOGLE_CLIENT_ID) : null;
+// In-memory OTP store: email -> { otp, expiresAt }
+const otpStore = new Map();
 
-export async function verifyGoogleToken(idToken) {
-  if (!oauthClient) throw new Error('GOOGLE_CLIENT_ID not configured');
-  const ticket = await oauthClient.verifyIdToken({
-    idToken,
-    audience: GOOGLE_CLIENT_ID,
+export function generateOtp() {
+  return crypto.randomInt(100000, 999999).toString();
+}
+
+export function storeOtp(email, otp) {
+  otpStore.set(email.toLowerCase(), {
+    otp,
+    expiresAt: Date.now() + 10 * 60 * 1000, // 10 minutes
   });
-  const payload = ticket.getPayload();
-  return {
-    googleId: payload.sub,
-    email: payload.email,
-    name: payload.name,
-    picture: payload.picture,
-  };
+}
+
+export function verifyOtp(email, otp) {
+  const entry = otpStore.get(email.toLowerCase());
+  if (!entry) return false;
+  if (Date.now() > entry.expiresAt) {
+    otpStore.delete(email.toLowerCase());
+    return false;
+  }
+  if (entry.otp !== otp) return false;
+  otpStore.delete(email.toLowerCase());
+  return true;
 }
 
 export function generateJwt(user) {
