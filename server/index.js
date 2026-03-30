@@ -352,19 +352,38 @@ app.post('/api/words/:id/generate-images', async (req, res) => {
       return res.json({ word: word.word, visual_anchors: anchors });
     }
 
-    // Generate Pollinations URLs for each anchor scene
-    anchors = anchors.map((anchor, idx) => {
-      const prompt = `Children's book illustration, watercolor style, colorful, friendly, no text: ${anchor.scene}`;
+    // Generate Pollinations URLs and verify they work (one at a time to avoid rate limits)
+    let allWorked = true;
+    for (let idx = 0; idx < anchors.length; idx++) {
+      const anchor = anchors[idx];
+      const prompt = `Children's book illustration, watercolor, colorful: ${anchor.scene}`;
       const encodedPrompt = encodeURIComponent(prompt);
       const seed = word.id * 10 + idx;
-      return {
-        ...anchor,
-        image_url: `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&nologo=true&seed=${seed}`,
-      };
-    });
+      const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&nologo=true&seed=${seed}`;
 
-    // Save back to DB
-    await pool.query('UPDATE words SET visual_anchors = $1 WHERE id = $2', [JSON.stringify(anchors), word.id]);
+      try {
+        const check = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(15000) });
+        if (check.ok) {
+          anchors[idx] = { ...anchor, image_url: url };
+        } else {
+          console.log(`Pollinations returned ${check.status} for word ${word.id} anchor ${idx}`);
+          allWorked = false;
+          break;
+        }
+      } catch (err) {
+        console.log(`Pollinations fetch failed for word ${word.id}: ${err.message}`);
+        allWorked = false;
+        break;
+      }
+
+      // Small delay between requests to avoid rate limits
+      if (idx < anchors.length - 1) await new Promise(r => setTimeout(r, 1000));
+    }
+
+    // Only save to DB if all images verified
+    if (allWorked && anchors[0]?.image_url) {
+      await pool.query('UPDATE words SET visual_anchors = $1 WHERE id = $2', [JSON.stringify(anchors), word.id]);
+    }
 
     res.json({ word: word.word, visual_anchors: anchors });
   } catch (err) {

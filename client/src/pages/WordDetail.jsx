@@ -11,7 +11,7 @@ export default function WordDetail({ wordId, onNavigate }) {
   const [anchors, setAnchors] = useState([]);
   const [imagesLoading, setImagesLoading] = useState(false);
   const [imageLoaded, setImageLoaded] = useState({});
-  const [imageRetries, setImageRetries] = useState({});
+  const [imageFailed, setImageFailed] = useState({});
   const [quotes, setQuotes] = useState([]);
   const [quotesLoading, setQuotesLoading] = useState(false);
 
@@ -20,6 +20,7 @@ export default function WordDetail({ wordId, onNavigate }) {
     setLoading(true);
     setAnchors([]);
     setImageLoaded({});
+    setImageFailed({});
     apiFetch(`/words/${wordId}`)
       .then(data => {
         const w = data.word || data;
@@ -248,30 +249,19 @@ export default function WordDetail({ wordId, onNavigate }) {
                     }}
                   >
                     {/* Image */}
-                    {anchor.image_url && (
+                    {anchor.image_url && !imageFailed[idx] && (
                       <div style={{ position: 'relative', width: '100%', height: 200, background: 'var(--cream-dark)', overflow: 'hidden' }}>
                         {!imageLoaded[idx] && (
                           <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13, zIndex: 1 }}>
                             <span style={{ fontSize: 48, marginBottom: 8 }}>{anchor.emoji}</span>
-                            {(imageRetries[idx] || 0) < 2 ? (
-                              <span><div className="spinner" style={{ display: 'inline-block', marginRight: 6, verticalAlign: 'middle' }}></div>Loading image...</span>
-                            ) : (
-                              <span>Image unavailable</span>
-                            )}
+                            <span><div className="spinner" style={{ display: 'inline-block', marginRight: 6, verticalAlign: 'middle' }}></div>Loading...</span>
                           </div>
                         )}
                         <img
                           src={anchor.image_url}
                           alt={anchor.scene}
                           onLoad={() => setImageLoaded(prev => ({ ...prev, [idx]: true }))}
-                          onError={(e) => {
-                            const retries = imageRetries[idx] || 0;
-                            if (retries < 2) {
-                              setImageRetries(prev => ({ ...prev, [idx]: retries + 1 }));
-                              setTimeout(() => { e.target.src = anchor.image_url + '&retry=' + Date.now(); }, 5000);
-                            }
-                            // After 2 retries, stop - show fallback
-                          }}
+                          onError={() => setImageFailed(prev => ({ ...prev, [idx]: true }))}
                           style={{
                             width: '100%',
                             height: '100%',
