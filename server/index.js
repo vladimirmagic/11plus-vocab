@@ -338,6 +338,26 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, uploadHandler.sin
   }
 });
 
+// Seed endpoint (one-time use)
+app.post('/api/seed', async (req, res) => {
+  try {
+    const { default: seedData } = await import('./seed-data.js');
+    let inserted = 0;
+    for (const w of seedData) {
+      const result = await pool.query(`
+        INSERT INTO words (word, definition, example_sentence, teacher_tip, synonyms, antonyms, category, difficulty, visual_emoji, visual_anchors, approved)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true)
+        ON CONFLICT (word) DO NOTHING RETURNING id
+      `, [w.word, w.definition, w.example_sentence, w.teacher_tip, w.synonyms, w.antonyms, w.category, w.difficulty, w.visual_emoji, JSON.stringify(w.visual_anchors)]);
+      if (result.rows.length > 0) inserted++;
+    }
+    res.json({ seeded: inserted, total: seedData.length });
+  } catch (err) {
+    console.error('Seed error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // SPA fallback
 app.get('*', (req, res) => {
   if (existsSync(clientDist)) {
