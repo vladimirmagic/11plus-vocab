@@ -1,6 +1,56 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
+
+function SpeakButton({ text }) {
+  const [speaking, setSpeaking] = useState(false);
+
+  useEffect(() => {
+    const handleEnd = () => setSpeaking(false);
+    window.speechSynthesis.addEventListener('end', handleEnd);
+    return () => {
+      window.speechSynthesis.removeEventListener('end', handleEnd);
+      window.speechSynthesis.cancel();
+    };
+  }, []);
+
+  const toggle = useCallback((e) => {
+    e.stopPropagation();
+    if (speaking) {
+      window.speechSynthesis.cancel();
+      setSpeaking(false);
+    } else {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.rate = 0.9;
+      utter.onend = () => setSpeaking(false);
+      utter.onerror = () => setSpeaking(false);
+      window.speechSynthesis.speak(utter);
+      setSpeaking(true);
+    }
+  }, [text, speaking]);
+
+  return (
+    <button
+      onClick={toggle}
+      title={speaking ? 'Stop' : 'Listen'}
+      style={{
+        background: 'none',
+        border: 'none',
+        cursor: 'pointer',
+        fontSize: 18,
+        padding: '2px 6px',
+        borderRadius: 6,
+        color: speaking ? 'var(--red)' : 'var(--green)',
+        opacity: 0.7,
+        transition: 'all 0.2s',
+        flexShrink: 0,
+      }}
+    >
+      {speaking ? '⏹' : '🔊'}
+    </button>
+  );
+}
 
 export default function WordDetail({ wordId, onNavigate }) {
   const { user } = useAuth();
@@ -144,13 +194,19 @@ export default function WordDetail({ wordId, onNavigate }) {
         {/* Left column */}
         <div>
           <div className="card" style={{ marginBottom: 16 }}>
-            <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Definition</h3>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Definition</h3>
+              <SpeakButton text={`${word.word}. ${word.definition}`} />
+            </div>
             <p style={{ fontSize: 18, lineHeight: 1.6 }}>{word.definition}</p>
           </div>
 
           {word.example_sentence && (
             <div className="card" style={{ marginBottom: 16 }}>
-              <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Example Sentence</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700 }}>Example Sentence</h3>
+                <SpeakButton text={word.example_sentence} />
+              </div>
               <p style={{ fontSize: 16, fontStyle: 'italic', lineHeight: 1.6, color: 'var(--text-light)' }}>
                 &ldquo;{word.example_sentence}&rdquo;
               </p>
@@ -159,7 +215,10 @@ export default function WordDetail({ wordId, onNavigate }) {
 
           {word.teacher_tip && (
             <div className="card" style={{ marginBottom: 16, background: 'var(--cream)', borderLeft: '4px solid var(--orange)' }}>
-              <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--orange)', fontWeight: 700, marginBottom: 8 }}>Teacher's Tip</h3>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--orange)', fontWeight: 700 }}>Teacher's Tip</h3>
+                <SpeakButton text={word.teacher_tip} />
+              </div>
               <p style={{ fontSize: 15, lineHeight: 1.6 }}>{word.teacher_tip}</p>
             </div>
           )}
@@ -205,9 +264,12 @@ export default function WordDetail({ wordId, onNavigate }) {
                     borderRadius: 10,
                     borderLeft: '3px solid var(--purple)',
                   }}>
-                    <p style={{ fontSize: 14, lineHeight: 1.6, fontStyle: 'italic', marginBottom: 6 }}>
-                      &ldquo;{q.quote}&rdquo;
-                    </p>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                      <p style={{ fontSize: 14, lineHeight: 1.6, fontStyle: 'italic', marginBottom: 6, flex: 1 }}>
+                        &ldquo;{q.quote}&rdquo;
+                      </p>
+                      <SpeakButton text={q.quote} />
+                    </div>
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
                       &mdash; {q.book} by {q.author}
                     </p>

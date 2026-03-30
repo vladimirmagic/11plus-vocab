@@ -53,3 +53,9 @@ DO $$ BEGIN
   ALTER TABLE progress ADD COLUMN favorite_anchor INTEGER;
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+
+-- Migration: add quotes column to words
+DO $$ BEGIN
+  ALTER TABLE words ADD COLUMN quotes JSONB DEFAULT '[]';
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;

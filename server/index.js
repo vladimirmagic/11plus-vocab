@@ -419,11 +419,11 @@ app.get('/api/words/:id/quotes', async (req, res) => {
     if (wordResult.rows.length === 0) return res.status(404).json({ error: 'Word not found' });
 
     const word = wordResult.rows[0];
-    const anchors = Array.isArray(word.visual_anchors) ? word.visual_anchors : [];
 
-    // Check if quotes are already cached in visual_anchors JSONB
-    if (anchors.length > 0 && anchors[0].quotes) {
-      return res.json({ quotes: anchors[0].quotes });
+    // Return cached quotes if we have exactly 5
+    const cached = Array.isArray(word.quotes) ? word.quotes : [];
+    if (cached.length === 5) {
+      return res.json({ quotes: cached });
     }
 
     const Anthropic = (await import('@anthropic-ai/sdk')).default;
@@ -432,13 +432,14 @@ app.get('/api/words/:id/quotes', async (req, res) => {
     const msg = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 800,
-      messages: [{ role: 'user', content: `Create 5 short example sentences using the word "${word.word}" (meaning: ${word.definition}) as if they come from famous children's books. Each sentence should sound like it belongs in that book's world and use the word naturally.
+      messages: [{ role: 'user', content: `Create exactly 5 short example sentences using the word "${word.word}" (meaning: ${word.definition}) as if they come from famous children's books. Each sentence should sound like it belongs in that book's world and use the word naturally.
 
 Rules:
 - One MUST be from Harry Potter
 - Others from books like: Matilda, Charlie and the Chocolate Factory, The BFG, Narnia, Percy Jackson, Diary of a Wimpy Kid, Tom Gates, etc.
 - Keep sentences short (1-2 sentences max) and suitable for 9-10 year olds
 - The word must be used correctly in context
+- Return EXACTLY 5 quotes
 
 Respond as JSON array:
 [{"book":"Harry Potter","author":"J.K. Rowling","quote":"..."},{"book":"...","author":"...","quote":"..."}]` }]
@@ -450,10 +451,9 @@ Respond as JSON array:
 
     const quotes = JSON.parse(jsonMatch[0]);
 
-    // Cache quotes in the first anchor object
-    if (anchors.length > 0) {
-      anchors[0].quotes = quotes;
-      await pool.query('UPDATE words SET visual_anchors = $1 WHERE id = $2', [JSON.stringify(anchors), word.id]);
+    // Only cache if we got exactly 5 valid quotes
+    if (Array.isArray(quotes) && quotes.length === 5 && quotes.every(q => q.book && q.author && q.quote)) {
+      await pool.query('UPDATE words SET quotes = $1 WHERE id = $2', [JSON.stringify(quotes), word.id]);
     }
 
     res.json({ quotes });
