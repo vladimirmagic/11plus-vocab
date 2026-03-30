@@ -19,35 +19,18 @@ const NAV_ITEMS = [
 const ADMIN_NAV = { id: 'admin', label: 'Admin Panel', icon: '⚙️' };
 
 function LoginScreen() {
-  const { sendOtp, verifyOtp } = useAuth();
+  const { loginWithEmail } = useAuth();
   const [email, setEmail] = useState('');
-  const [otp, setOtp] = useState('');
-  const [step, setStep] = useState('email'); // 'email' or 'otp'
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSendOtp = async (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     if (!email.includes('@')) { setError('Please enter a valid email'); return; }
     setSending(true);
     setError('');
     try {
-      await sendOtp(email);
-      setStep('otp');
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSending(false);
-    }
-  };
-
-  const handleVerifyOtp = async (e) => {
-    e.preventDefault();
-    if (otp.length !== 6) { setError('Please enter the 6-digit code'); return; }
-    setSending(true);
-    setError('');
-    try {
-      await verifyOtp(email, otp);
+      await loginWithEmail(email);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -78,49 +61,20 @@ function LoginScreen() {
       </div>
 
       <div className="card" style={{ maxWidth: 400, width: '100%', marginTop: 8 }}>
-        {step === 'email' ? (
-          <form onSubmit={handleSendOtp}>
-            <h3 style={{ marginBottom: 12, textAlign: 'center' }}>Sign in with your email</h3>
-            <input
-              type="email"
-              placeholder="Enter your email address"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              required
-              style={{ marginBottom: 12 }}
-            />
-            <button className="btn-primary" type="submit" disabled={sending} style={{ width: '100%' }}>
-              {sending ? 'Sending code...' : 'Send Login Code'}
-            </button>
-          </form>
-        ) : (
-          <form onSubmit={handleVerifyOtp}>
-            <h3 style={{ marginBottom: 8, textAlign: 'center' }}>Check your email</h3>
-            <p style={{ fontSize: 13, color: 'var(--text-muted)', textAlign: 'center', marginBottom: 12 }}>
-              We sent a 6-digit code to <strong>{email}</strong>
-            </p>
-            <input
-              type="text"
-              placeholder="Enter 6-digit code"
-              value={otp}
-              onChange={e => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              maxLength={6}
-              style={{ marginBottom: 12, textAlign: 'center', fontSize: 24, letterSpacing: 8, fontWeight: 700 }}
-              autoFocus
-            />
-            <button className="btn-primary" type="submit" disabled={sending} style={{ width: '100%' }}>
-              {sending ? 'Verifying...' : 'Verify Code'}
-            </button>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={() => { setStep('email'); setOtp(''); setError(''); }}
-              style={{ width: '100%', marginTop: 8 }}
-            >
-              Use a different email
-            </button>
-          </form>
-        )}
+        <form onSubmit={handleLogin}>
+          <h3 style={{ marginBottom: 12, textAlign: 'center' }}>Get started with your email</h3>
+          <input
+            type="email"
+            placeholder="Enter your email address"
+            value={email}
+            onChange={e => setEmail(e.target.value)}
+            required
+            style={{ marginBottom: 12 }}
+          />
+          <button className="btn-primary" type="submit" disabled={sending} style={{ width: '100%' }}>
+            {sending ? 'Signing in...' : 'Start Learning'}
+          </button>
+        </form>
         {error && <p style={{ color: 'var(--red)', marginTop: 8, textAlign: 'center', fontSize: 13 }}>{error}</p>}
       </div>
     </div>

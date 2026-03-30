@@ -7,7 +7,7 @@ import { dirname, join } from 'path';
 import { existsSync } from 'fs';
 import pool from './db.js';
 import { initDatabase } from './init-db.js';
-import { generateOtp, storeOtp, verifyOtp, generateJwt, authMiddleware, adminMiddleware } from './auth.js';
+import { generateJwt, authMiddleware, adminMiddleware } from './auth.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '.env'), override: true });
@@ -31,56 +31,11 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// ── Auth (Email OTP) ──
-app.post('/api/auth/send-otp', async (req, res) => {
+// ── Auth (Email only) ──
+app.post('/api/auth/login', async (req, res) => {
   try {
     const { email } = req.body;
     if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
-
-    const otp = generateOtp();
-    storeOtp(email, otp);
-    console.log(`OTP for ${email}: ${otp}`);
-
-    if (process.env.RESEND_API_KEY) {
-      try {
-        const { Resend } = await import('resend');
-        const resend = new Resend(process.env.RESEND_API_KEY);
-        const result = await resend.emails.send({
-          from: 'Vocab Trainer <onboarding@resend.dev>',
-          to: email,
-          subject: 'Your login code for 11 Plus Vocab',
-          html: `<div style="font-family:sans-serif;max-width:400px;margin:0 auto;padding:20px">
-            <h2 style="color:#4A7A5A">11 Plus Vocabulary Trainer</h2>
-            <p>Your login code is:</p>
-            <div style="font-size:32px;font-weight:bold;letter-spacing:8px;padding:16px;background:#F5EBD8;border-radius:8px;text-align:center;color:#3D3228">${otp}</div>
-            <p style="color:#888;font-size:13px">This code expires in 10 minutes.</p>
-          </div>`,
-        });
-        if (result.error) {
-          console.error('Resend error:', result.error);
-          return res.json({ sent: true, note: 'Email delivery may be limited on free tier. Check server logs for OTP.' });
-        }
-      } catch (emailErr) {
-        console.error('Email send error:', emailErr.message);
-        return res.json({ sent: true, note: 'Email delivery failed. Check server logs for OTP.' });
-      }
-    }
-
-    res.json({ sent: true });
-  } catch (err) {
-    console.error('Send OTP error:', err);
-    res.status(500).json({ error: 'Failed to send code' });
-  }
-});
-
-app.post('/api/auth/verify-otp', async (req, res) => {
-  try {
-    const { email, otp } = req.body;
-    if (!email || !otp) return res.status(400).json({ error: 'Email and code required' });
-
-    if (!verifyOtp(email, otp)) {
-      return res.status(401).json({ error: 'Invalid or expired code' });
-    }
 
     const result = await pool.query(`
       INSERT INTO users (email, name)
@@ -93,8 +48,8 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     const token = generateJwt(user);
     res.json({ token, user: { id: user.id, email: user.email, name: user.name, avatar_url: user.avatar_url, role: user.role } });
   } catch (err) {
-    console.error('Verify OTP error:', err);
-    res.status(500).json({ error: 'Verification failed' });
+    console.error('Login error:', err);
+    res.status(500).json({ error: 'Login failed' });
   }
 });
 

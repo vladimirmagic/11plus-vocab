@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
-import { getToken, setToken, clearToken, apiFetch } from './api.js';
+import { getToken, setToken, clearToken } from './api.js';
 
 const AuthContext = createContext(null);
 
@@ -17,25 +17,14 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const sendOtp = useCallback(async (email) => {
-    const r = await fetch('/api/auth/send-otp', {
+  const loginWithEmail = useCallback(async (email) => {
+    const r = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
     const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Failed to send code');
-    return data;
-  }, []);
-
-  const verifyOtp = useCallback(async (email, otp) => {
-    const r = await fetch('/api/auth/verify-otp', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, otp }),
-    });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Verification failed');
+    if (!r.ok) throw new Error(data.error || 'Login failed');
     setToken(data.token);
     setTokenState(data.token);
     setUser(data.user);
@@ -49,7 +38,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, sendOtp, verifyOtp, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, loginWithEmail, logout }}>
       {children}
     </AuthContext.Provider>
   );
