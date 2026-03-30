@@ -11,6 +11,7 @@ export default function WordDetail({ wordId, onNavigate }) {
   const [anchors, setAnchors] = useState([]);
   const [imagesLoading, setImagesLoading] = useState(false);
   const [imageLoaded, setImageLoaded] = useState({});
+  const [imageRetries, setImageRetries] = useState({});
   const [quotes, setQuotes] = useState([]);
   const [quotesLoading, setQuotesLoading] = useState(false);
 
@@ -18,7 +19,7 @@ export default function WordDetail({ wordId, onNavigate }) {
   useEffect(() => {
     setLoading(true);
     setAnchors([]);
-    setImageErrors({});
+    setImageLoaded({});
     apiFetch(`/words/${wordId}`)
       .then(data => {
         const w = data.word || data;
@@ -248,10 +249,15 @@ export default function WordDetail({ wordId, onNavigate }) {
                   >
                     {/* Image */}
                     {anchor.image_url && (
-                      <div style={{ position: 'relative', width: '100%', height: 200, background: 'var(--cream-dark)' }}>
+                      <div style={{ position: 'relative', width: '100%', height: 200, background: 'var(--cream-dark)', overflow: 'hidden' }}>
                         {!imageLoaded[idx] && (
-                          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
-                            <div className="spinner" style={{ marginRight: 8 }}></div> Loading image...
+                          <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13, zIndex: 1 }}>
+                            <span style={{ fontSize: 48, marginBottom: 8 }}>{anchor.emoji}</span>
+                            {(imageRetries[idx] || 0) < 2 ? (
+                              <span><div className="spinner" style={{ display: 'inline-block', marginRight: 6, verticalAlign: 'middle' }}></div>Loading image...</span>
+                            ) : (
+                              <span>Image unavailable</span>
+                            )}
                           </div>
                         )}
                         <img
@@ -259,14 +265,22 @@ export default function WordDetail({ wordId, onNavigate }) {
                           alt={anchor.scene}
                           onLoad={() => setImageLoaded(prev => ({ ...prev, [idx]: true }))}
                           onError={(e) => {
-                            // Retry after 3 seconds (Pollinations rate limit)
-                            setTimeout(() => { e.target.src = anchor.image_url + '&retry=' + Date.now(); }, 3000);
+                            const retries = imageRetries[idx] || 0;
+                            if (retries < 2) {
+                              setImageRetries(prev => ({ ...prev, [idx]: retries + 1 }));
+                              setTimeout(() => { e.target.src = anchor.image_url + '&retry=' + Date.now(); }, 5000);
+                            }
+                            // After 2 retries, stop - show fallback
                           }}
                           style={{
                             width: '100%',
-                            height: 200,
+                            height: '100%',
                             objectFit: 'cover',
-                            display: imageLoaded[idx] ? 'block' : 'none',
+                            position: 'absolute',
+                            top: 0,
+                            left: 0,
+                            opacity: imageLoaded[idx] ? 1 : 0,
+                            transition: 'opacity 0.3s',
                           }}
                         />
                       </div>
