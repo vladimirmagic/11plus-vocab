@@ -10,7 +10,9 @@ export default function WordDetail({ wordId, onNavigate }) {
   const [favoriteAnchor, setFavoriteAnchor] = useState(null);
   const [anchors, setAnchors] = useState([]);
   const [imagesLoading, setImagesLoading] = useState(false);
-  const [imageErrors, setImageErrors] = useState({});
+  const [imageLoaded, setImageLoaded] = useState({});
+  const [quotes, setQuotes] = useState([]);
+  const [quotesLoading, setQuotesLoading] = useState(false);
 
   // Load word
   useEffect(() => {
@@ -63,6 +65,16 @@ export default function WordDetail({ wordId, onNavigate }) {
       .catch(() => {});
   }, [user, wordId]);
 
+  // Load book quotes
+  useEffect(() => {
+    if (!word) return;
+    setQuotesLoading(true);
+    apiFetch(`/words/${wordId}/quotes`)
+      .then(data => setQuotes(data.quotes || []))
+      .catch(err => console.error('Quotes failed:', err))
+      .finally(() => setQuotesLoading(false));
+  }, [word, wordId]);
+
   async function updateProgress(status) {
     if (!user) return;
     try {
@@ -81,10 +93,6 @@ export default function WordDetail({ wordId, onNavigate }) {
     } catch (err) {
       console.error('Failed to save favorite:', err);
     }
-  }
-
-  function handleImageError(idx) {
-    setImageErrors(prev => ({ ...prev, [idx]: true }));
   }
 
   function handleSynonymClick(syn) {
@@ -175,6 +183,37 @@ export default function WordDetail({ wordId, onNavigate }) {
               </div>
             </div>
           )}
+
+          {/* Book Quotes */}
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--purple)', fontWeight: 700, marginBottom: 12 }}>
+              In Famous Books
+            </h3>
+            {quotesLoading ? (
+              <div style={{ textAlign: 'center', padding: 16, color: 'var(--text-muted)' }}>
+                <div className="spinner" style={{ margin: '0 auto 8px' }}></div>
+                <p style={{ fontSize: 13 }}>Finding quotes from your favourite books...</p>
+              </div>
+            ) : quotes.length > 0 ? (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                {quotes.map((q, idx) => (
+                  <div key={idx} style={{
+                    padding: '12px 16px',
+                    background: 'var(--cream)',
+                    borderRadius: 10,
+                    borderLeft: '3px solid var(--purple)',
+                  }}>
+                    <p style={{ fontSize: 14, lineHeight: 1.6, fontStyle: 'italic', marginBottom: 6 }}>
+                      &ldquo;{q.quote}&rdquo;
+                    </p>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>
+                      &mdash; {q.book} by {q.author}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
         </div>
 
         {/* Right column */}
@@ -208,19 +247,29 @@ export default function WordDetail({ wordId, onNavigate }) {
                     }}
                   >
                     {/* Image */}
-                    {anchor.image_url && !imageErrors[idx] && (
-                      <img
-                        src={anchor.image_url}
-                        alt={anchor.scene}
-                        loading="lazy"
-                        onError={() => handleImageError(idx)}
-                        style={{
-                          width: '100%',
-                          height: 200,
-                          objectFit: 'cover',
-                          display: 'block',
-                        }}
-                      />
+                    {anchor.image_url && (
+                      <div style={{ position: 'relative', width: '100%', height: 200, background: 'var(--cream-dark)' }}>
+                        {!imageLoaded[idx] && (
+                          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+                            <div className="spinner" style={{ marginRight: 8 }}></div> Loading image...
+                          </div>
+                        )}
+                        <img
+                          src={anchor.image_url}
+                          alt={anchor.scene}
+                          onLoad={() => setImageLoaded(prev => ({ ...prev, [idx]: true }))}
+                          onError={(e) => {
+                            // Retry after 3 seconds (Pollinations rate limit)
+                            setTimeout(() => { e.target.src = anchor.image_url + '&retry=' + Date.now(); }, 3000);
+                          }}
+                          style={{
+                            width: '100%',
+                            height: 200,
+                            objectFit: 'cover',
+                            display: imageLoaded[idx] ? 'block' : 'none',
+                          }}
+                        />
+                      </div>
                     )}
 
                     {/* Emoji + text fallback or supplement */}
