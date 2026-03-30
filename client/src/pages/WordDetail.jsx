@@ -2,33 +2,50 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
 
+let currentAudio = null;
+
 function SpeakButton({ text }) {
   const [speaking, setSpeaking] = useState(false);
+  const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    const handleEnd = () => setSpeaking(false);
-    window.speechSynthesis.addEventListener('end', handleEnd);
-    return () => {
-      window.speechSynthesis.removeEventListener('end', handleEnd);
-      window.speechSynthesis.cancel();
-    };
-  }, []);
-
-  const toggle = useCallback((e) => {
+  const toggle = useCallback(async (e) => {
     e.stopPropagation();
-    if (speaking) {
-      window.speechSynthesis.cancel();
+    if (speaking || loading) {
+      if (currentAudio) { currentAudio.pause(); currentAudio = null; }
       setSpeaking(false);
-    } else {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
+    try {
+      const res = await fetch('/api/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      if (!data.audio) throw new Error('No audio');
+
+      if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+      const audio = new Audio('data:audio/mp3;base64,' + data.audio);
+      currentAudio = audio;
+      audio.onended = () => { setSpeaking(false); currentAudio = null; };
+      audio.onerror = () => { setSpeaking(false); currentAudio = null; };
+      await audio.play();
+      setSpeaking(true);
+    } catch {
+      // Fallback to browser TTS
       window.speechSynthesis.cancel();
       const utter = new SpeechSynthesisUtterance(text);
       utter.rate = 0.9;
       utter.onend = () => setSpeaking(false);
-      utter.onerror = () => setSpeaking(false);
       window.speechSynthesis.speak(utter);
       setSpeaking(true);
+    } finally {
+      setLoading(false);
     }
-  }, [text, speaking]);
+  }, [text, speaking, loading]);
 
   return (
     <button
@@ -41,13 +58,13 @@ function SpeakButton({ text }) {
         fontSize: 18,
         padding: '2px 6px',
         borderRadius: 6,
-        color: speaking ? 'var(--red)' : 'var(--green)',
+        color: speaking ? 'var(--red)' : loading ? 'var(--text-muted)' : 'var(--green)',
         opacity: 0.7,
         transition: 'all 0.2s',
         flexShrink: 0,
       }}
     >
-      {speaking ? '⏹' : '🔊'}
+      {speaking ? '⏹' : loading ? '...' : '🔊'}
     </button>
   );
 }

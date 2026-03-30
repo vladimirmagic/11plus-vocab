@@ -356,13 +356,13 @@ app.post('/api/words/:id/generate-images', async (req, res) => {
     let allWorked = true;
     for (let idx = 0; idx < anchors.length; idx++) {
       const anchor = anchors[idx];
-      const prompt = `Children's book illustration, watercolor, colorful: ${anchor.scene}`;
+      const prompt = `watercolor illustration for children: ${anchor.scene}`;
       const encodedPrompt = encodeURIComponent(prompt);
       const seed = word.id * 10 + idx;
-      const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=512&height=512&nologo=true&seed=${seed}`;
+      const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=400&height=400&nologo=true&seed=${seed}&model=flux`;
 
       try {
-        const check = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(15000) });
+        const check = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(30000) });
         if (check.ok) {
           anchors[idx] = { ...anchor, image_url: url };
         } else {
@@ -376,8 +376,8 @@ app.post('/api/words/:id/generate-images', async (req, res) => {
         break;
       }
 
-      // Small delay between requests to avoid rate limits
-      if (idx < anchors.length - 1) await new Promise(r => setTimeout(r, 1000));
+      // 2s delay between requests to avoid rate limits
+      if (idx < anchors.length - 1) await new Promise(r => setTimeout(r, 2000));
     }
 
     // Only save to DB if all images verified
@@ -460,6 +460,39 @@ Respond as JSON array:
   } catch (err) {
     console.error('Quotes error:', err);
     res.status(500).json({ error: 'Failed to generate quotes' });
+  }
+});
+
+// ── Text-to-Speech via Google Cloud ──
+app.post('/api/tts', async (req, res) => {
+  try {
+    const { text } = req.body;
+    if (!text || text.length > 500) return res.status(400).json({ error: 'Text required (max 500 chars)' });
+
+    const apiKey = process.env.GOOGLE_TTS_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'TTS not configured' });
+
+    const response = await fetch(`https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        input: { text },
+        voice: { languageCode: 'en-GB', name: 'en-GB-Wavenet-B' },
+        audioConfig: { audioEncoding: 'MP3', speakingRate: 0.9 },
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error('Google TTS error:', err);
+      return res.status(500).json({ error: 'TTS failed' });
+    }
+
+    const data = await response.json();
+    res.json({ audio: data.audioContent });
+  } catch (err) {
+    console.error('TTS error:', err);
+    res.status(500).json({ error: 'TTS failed' });
   }
 });
 
