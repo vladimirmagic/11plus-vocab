@@ -17,11 +17,11 @@ export function AuthProvider({ children }) {
       .finally(() => setLoading(false));
   }, []);
 
-  const loginWithEmail = useCallback(async (email) => {
+  const loginWithName = useCallback(async (name) => {
     const r = await fetch('/api/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
+      body: JSON.stringify({ name }),
     });
     const text = await r.text();
     let data;
@@ -40,7 +40,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, token, loading, loginWithEmail, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, loginWithName, logout }}>
       {children}
     </AuthContext.Provider>
   );

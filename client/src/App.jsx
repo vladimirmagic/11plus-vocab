@@ -19,18 +19,18 @@ const NAV_ITEMS = [
 const ADMIN_NAV = { id: 'admin', label: 'Admin Panel', icon: '⚙️' };
 
 function LoginScreen() {
-  const { loginWithEmail } = useAuth();
-  const [email, setEmail] = useState('');
+  const { loginWithName } = useAuth();
+  const [name, setName] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
 
   const handleLogin = async (e) => {
     e.preventDefault();
-    if (!email.includes('@')) { setError('Please enter a valid email'); return; }
+    if (name.trim().length < 2) { setError('Please enter your name'); return; }
     setSending(true);
     setError('');
     try {
-      await loginWithEmail(email);
+      await loginWithName(name.trim());
     } catch (err) {
       setError(err.message);
     } finally {
@@ -62,14 +62,15 @@ function LoginScreen() {
 
       <div className="card" style={{ maxWidth: 400, width: '100%', marginTop: 8 }}>
         <form onSubmit={handleLogin}>
-          <h3 style={{ marginBottom: 12, textAlign: 'center' }}>Get started with your email</h3>
+          <h3 style={{ marginBottom: 12, textAlign: 'center' }}>What's your name?</h3>
           <input
-            type="email"
-            placeholder="Enter your email address"
-            value={email}
-            onChange={e => setEmail(e.target.value)}
+            type="text"
+            placeholder="Enter your first name"
+            value={name}
+            onChange={e => setName(e.target.value)}
             required
             style={{ marginBottom: 12 }}
+            autoFocus
           />
           <button className="btn-primary" type="submit" disabled={sending} style={{ width: '100%' }}>
             {sending ? 'Signing in...' : 'Start Learning'}

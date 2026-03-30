@@ -31,22 +31,22 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// ── Auth (Email only) ──
+// ── Auth (Name only) ──
 app.post('/api/auth/login', async (req, res) => {
   try {
-    const { email } = req.body;
-    if (!email || !email.includes('@')) return res.status(400).json({ error: 'Valid email required' });
+    const { name } = req.body;
+    if (!name || name.trim().length < 2) return res.status(400).json({ error: 'Name required (at least 2 characters)' });
 
     const result = await pool.query(`
-      INSERT INTO users (email, name)
-      VALUES ($1, $2)
-      ON CONFLICT (email) DO UPDATE SET name = users.name
-      RETURNING id, email, name, avatar_url, role
-    `, [email.toLowerCase(), email.split('@')[0]]);
+      INSERT INTO users (name)
+      VALUES ($1)
+      ON CONFLICT (name) DO UPDATE SET name = users.name
+      RETURNING id, name, email, avatar_url, role
+    `, [name.trim()]);
 
     const user = result.rows[0];
     const token = generateJwt(user);
-    res.json({ token, user: { id: user.id, email: user.email, name: user.name, avatar_url: user.avatar_url, role: user.role } });
+    res.json({ token, user: { id: user.id, name: user.name, email: user.email, avatar_url: user.avatar_url, role: user.role } });
   } catch (err) {
     console.error('Login error:', err);
     res.status(500).json({ error: 'Login failed' });

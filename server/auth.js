@@ -10,7 +10,7 @@ const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-me';
 const JWT_EXPIRY = '7d';
 
 export function generateJwt(user) {
-  return jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+  return jwt.sign({ userId: user.id, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
 }
 
 export function authMiddleware(req, res, next) {
