@@ -23,7 +23,9 @@ export function AuthProvider({ children }) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email }),
     });
-    const data = await r.json();
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error('Server error - please try again'); }
     if (!r.ok) throw new Error(data.error || 'Login failed');
     setToken(data.token);
     setTokenState(data.token);
