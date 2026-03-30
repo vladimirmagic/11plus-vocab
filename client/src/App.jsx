@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { useAuth } from './AuthContext.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import WordList from './pages/WordList.jsx';
+import WordDetail from './pages/WordDetail.jsx';
 import WordClusters from './pages/WordClusters.jsx';
 import MatchingGame from './pages/MatchingGame.jsx';
 import SentenceBuilder from './pages/SentenceBuilder.jsx';
@@ -129,10 +130,12 @@ function LoginScreen() {
 export default function App() {
   const { user, loading, logout } = useAuth();
   const [tab, setTab] = useState('dashboard');
+  const [tabParam, setTabParam] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  const handleNavigate = useCallback((newTab) => {
+  const handleNavigate = useCallback((newTab, param) => {
     setTab(newTab);
+    setTabParam(param || null);
     setSidebarOpen(false);
   }, []);
 
@@ -154,7 +157,8 @@ export default function App() {
   const renderPage = () => {
     switch (tab) {
       case 'dashboard': return <Dashboard onNavigate={handleNavigate} />;
-      case 'words': return <WordList />;
+      case 'words': return <WordList onNavigate={handleNavigate} initialSearch={tabParam || ''} />;
+      case 'word': return <WordDetail wordId={tabParam} onNavigate={handleNavigate} />;
       case 'clusters': return <WordClusters />;
       case 'matching': return <MatchingGame />;
       case 'sentences': return <SentenceBuilder />;
@@ -192,7 +196,7 @@ export default function App() {
           {navItems.map(item => (
             <div
               key={item.id}
-              className={`nav-item ${tab === item.id ? 'active' : ''}`}
+              className={`nav-item ${tab === item.id || (item.id === 'words' && tab === 'word') ? 'active' : ''}`}
               onClick={() => handleNavigate(item.id)}
             >
               <span className="nav-icon">{item.icon}</span>

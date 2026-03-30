@@ -2,16 +2,14 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
 
-export default function WordList() {
+export default function WordList({ onNavigate, initialSearch }) {
   const { user } = useAuth();
   const [words, setWords] = useState([]);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialSearch || '');
   const [category, setCategory] = useState('');
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [selectedWord, setSelectedWord] = useState(null);
   const [progress, setProgress] = useState({});
-  const [favoriteAnchors, setFavoriteAnchors] = useState({});
 
   const fetchWords = useCallback(async () => {
     setLoading(true);
@@ -25,14 +23,12 @@ export default function WordList() {
     }
   }, [search, category]);
 
-  useEffect(() => {
-    fetchWords();
-  }, [fetchWords]);
+  useEffect(() => { fetchWords(); }, [fetchWords]);
 
   useEffect(() => {
     apiFetch('/words/categories')
       .then(data => setCategories(data.categories || data))
-      .catch(err => console.error('Failed to fetch categories:', err));
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -41,12 +37,10 @@ export default function WordList() {
       .then(data => {
         const map = {};
         const items = data.progress || data;
-        if (Array.isArray(items)) {
-          items.forEach(p => { map[p.word_id] = p.status; });
-        }
+        if (Array.isArray(items)) items.forEach(p => { map[p.word_id] = p.status; });
         setProgress(map);
       })
-      .catch(err => console.error('Failed to fetch progress:', err));
+      .catch(() => {});
   }, [user]);
 
   function truncate(str, len = 80) {
@@ -56,39 +50,19 @@ export default function WordList() {
 
   function getStatusBadge(wordId) {
     const status = progress[wordId];
-    if (!status || status === 'new') return <span className="badge-new">New</span>;
-    if (status === 'learning') return <span className="badge-learning">Learning</span>;
-    if (status === 'mastered') return <span className="badge-mastered">Mastered</span>;
+    if (!status || status === 'new') return <span className="badge badge-new">New</span>;
+    if (status === 'learning') return <span className="badge badge-learning">Learning</span>;
+    if (status === 'mastered') return <span className="badge badge-mastered">Mastered</span>;
     return null;
-  }
-
-  async function updateProgress(wordId, status) {
-    if (!user) return;
-    try {
-      await apiFetch(`/progress/${wordId}`, {
-        method: 'PUT',
-        body: { status },
-      });
-      setProgress(prev => ({ ...prev, [wordId]: status }));
-    } catch (err) {
-      console.error('Failed to update progress:', err);
-    }
-  }
-
-  function navigateToWord(wordText) {
-    setSelectedWord(null);
-    setSearch(wordText);
-    setCategory('');
-  }
-
-  function handleOverlayClick(e) {
-    if (e.target === e.currentTarget) {
-      setSelectedWord(null);
-    }
   }
 
   return (
     <div className="word-list-page">
+      <div className="page-header">
+        <h2>Word Library</h2>
+        <p>{words.length} words available</p>
+      </div>
+
       <div className="search-bar">
         <span className="search-icon">&#128269;</span>
         <input
@@ -100,10 +74,7 @@ export default function WordList() {
       </div>
 
       <div className="category-pills">
-        <button
-          className={`category-pill${category === '' ? ' active' : ''}`}
-          onClick={() => setCategory('')}
-        >
+        <button className={`category-pill${category === '' ? ' active' : ''}`} onClick={() => setCategory('')}>
           All
         </button>
         {categories.map(cat => (
@@ -118,16 +89,20 @@ export default function WordList() {
       </div>
 
       {loading ? (
-        <p>Loading words...</p>
+        <div className="loading"><div className="spinner"></div>Loading words...</div>
       ) : words.length === 0 ? (
-        <p>No words found.</p>
+        <div className="empty-state">
+          <div className="empty-icon">🔍</div>
+          <h3>No words found</h3>
+          <p>Try a different search or category</p>
+        </div>
       ) : (
         <div className="word-grid">
           {words.map(word => (
             <div
               key={word.id}
               className="card"
-              onClick={() => setSelectedWord(word)}
+              onClick={() => onNavigate('word', word.id)}
             >
               <div className="card-emoji">{word.visual_emoji}</div>
               <div className="card-word">{word.word}</div>
@@ -138,113 +113,6 @@ export default function WordList() {
               </div>
             </div>
           ))}
-        </div>
-      )}
-
-      {selectedWord && (
-        <div className="modal-overlay" onClick={handleOverlayClick}>
-          <div className="modal">
-            <button className="modal-close" onClick={() => setSelectedWord(null)}>&times;</button>
-
-            <div className="word-detail-emoji">{selectedWord.visual_emoji}</div>
-            <h2 className="word-detail-word">{selectedWord.word}</h2>
-            <span className="word-detail-category">{selectedWord.category}</span>
-
-            <div className="word-detail-section">
-              <h3>Definition</h3>
-              <p>{selectedWord.definition}</p>
-            </div>
-
-            {selectedWord.example_sentence && (
-              <div className="word-detail-section">
-                <h3>Example Sentence</h3>
-                <p><em>{selectedWord.example_sentence}</em></p>
-              </div>
-            )}
-
-            {selectedWord.teacher_tip && (
-              <div className="word-detail-section" style={{ background: 'var(--cream)', padding: '12px', borderRadius: '8px' }}>
-                <h3>Teacher's Tip 💡</h3>
-                <p>{selectedWord.teacher_tip}</p>
-              </div>
-            )}
-
-            {selectedWord.visual_anchors && selectedWord.visual_anchors.length > 0 && (
-              <div className="word-detail-section">
-                <h3>Visual Anchors</h3>
-                <div className="visual-anchors">
-                  {selectedWord.visual_anchors.map((anchor, idx) => (
-                    <div
-                      key={idx}
-                      className={`anchor-card${favoriteAnchors[selectedWord.id] === idx ? ' selected' : ''}`}
-                      onClick={() => setFavoriteAnchors(prev => ({ ...prev, [selectedWord.id]: idx }))}
-                    >
-                      <span className="anchor-emoji">{anchor.emoji}</span>
-                      <span className="anchor-scene">{anchor.scene}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {selectedWord.synonyms && selectedWord.synonyms.length > 0 && (
-              <div className="word-detail-section">
-                <h3>Synonyms</h3>
-                <div className="tag-list">
-                  {selectedWord.synonyms.map((syn, idx) => (
-                    <span
-                      key={idx}
-                      className="synonym-tag"
-                      onClick={() => navigateToWord(syn)}
-                    >
-                      {syn}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {selectedWord.antonyms && selectedWord.antonyms.length > 0 && (
-              <div className="word-detail-section">
-                <h3>Antonyms</h3>
-                <div className="tag-list">
-                  {selectedWord.antonyms.map((ant, idx) => (
-                    <span
-                      key={idx}
-                      className="antonym-tag"
-                      onClick={() => navigateToWord(ant)}
-                    >
-                      {ant}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {user && (
-              <div className="word-detail-section progress-buttons">
-                <h3>Progress</h3>
-                <button
-                  className={`btn-secondary${progress[selectedWord.id] === 'new' || !progress[selectedWord.id] ? ' active' : ''}`}
-                  onClick={() => updateProgress(selectedWord.id, 'new')}
-                >
-                  New
-                </button>
-                <button
-                  className={`btn-secondary${progress[selectedWord.id] === 'learning' ? ' active' : ''}`}
-                  onClick={() => updateProgress(selectedWord.id, 'learning')}
-                >
-                  Learning
-                </button>
-                <button
-                  className={`btn-primary${progress[selectedWord.id] === 'mastered' ? ' active' : ''}`}
-                  onClick={() => updateProgress(selectedWord.id, 'mastered')}
-                >
-                  Mastered
-                </button>
-              </div>
-            )}
-          </div>
         </div>
       )}
     </div>
