@@ -29,18 +29,20 @@ export default function WordDetail({ wordId, onNavigate }) {
 
   // Generate images if not cached
   useEffect(() => {
-    if (!word || anchors.length === 0) return;
-    if (anchors[0].image_url) return; // Already have images
+    if (!word) return;
+    const currentAnchors = Array.isArray(word.visual_anchors) ? word.visual_anchors : [];
+    if (currentAnchors.length === 0) return;
+    if (currentAnchors[0].image_url) return; // Already have images
 
     setImagesLoading(true);
     apiFetch(`/words/${wordId}/generate-images`, { method: 'POST' })
       .then(data => {
         const updated = data.visual_anchors || [];
-        setAnchors(updated);
+        if (updated.length > 0) setAnchors(updated);
       })
-      .catch(() => {}) // Fail silently - emoji fallback
+      .catch(err => console.error('Image generation failed:', err))
       .finally(() => setImagesLoading(false));
-  }, [word, anchors.length, wordId]);
+  }, [word, wordId]);
 
   // Load user progress + favorite
   useEffect(() => {
