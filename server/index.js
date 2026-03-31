@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import pool from './db.js';
 import { initDatabase } from './init-db.js';
 import { generateJwt, authMiddleware, adminMiddleware } from './auth.js';
@@ -17,8 +17,42 @@ app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
 const clientDist = join(__dirname, '..', 'client', 'dist');
+const imagesDir = join(__dirname, '..', 'client', 'dist', 'images');
+if (!existsSync(imagesDir)) mkdirSync(imagesDir, { recursive: true });
 if (existsSync(clientDist)) {
   app.use(express.static(clientDist));
+}
+
+// ── Gemini Imagen helper ──
+async function generateImageWithImagen(prompt) {
+  const apiKey = process.env.GOOGLE_IMAGEN_API_KEY;
+  if (!apiKey) throw new Error('GOOGLE_IMAGEN_API_KEY not set');
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-fast-generate-001:predict?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        instances: [{ prompt }],
+        parameters: { sampleCount: 1, aspectRatio: '1:1' }
+      }),
+      signal: AbortSignal.timeout(60000)
+    }
+  );
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Imagen API error ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  const prediction = data.predictions?.[0];
+  if (!prediction?.bytesBase64Encoded) {
+    throw new Error('No image data in Imagen response');
+  }
+
+  return Buffer.from(prediction.bytesBase64Encoded, 'base64');
 }
 
 // Health
@@ -358,40 +392,33 @@ app.post('/api/words/:id/generate-images', async (req, res) => {
     let anchors = Array.isArray(word.visual_anchors) ? word.visual_anchors : [];
 
     // Already generated? Return cached
-    if (anchors.length > 0 && anchors[0].image_url) {
+    if (anchors.length > 0 && anchors.every(a => a.image_url)) {
       return res.json({ word: word.word, visual_anchors: anchors });
     }
 
-    // Generate Pollinations URLs and verify they work (one at a time to avoid rate limits)
-    let allWorked = true;
+    // Generate images via Gemini Imagen (only for anchors missing image_url)
+    let anyGenerated = false;
     for (let idx = 0; idx < anchors.length; idx++) {
       const anchor = anchors[idx];
-      const prompt = `watercolor illustration for children: ${anchor.scene}`;
-      const encodedPrompt = encodeURIComponent(prompt);
-      const seed = word.id * 10 + idx;
-      const url = `https://image.pollinations.ai/prompt/${encodedPrompt}?width=400&height=400&nologo=true&seed=${seed}&model=flux`;
+      if (anchor.image_url) continue; // Already generated, skip
+      const prompt = `Watercolor illustration for children, soft pastel colors, whimsical style: ${anchor.scene}`;
 
       try {
-        const check = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(30000) });
-        if (check.ok) {
-          anchors[idx] = { ...anchor, image_url: url };
-        } else {
-          console.log(`Pollinations returned ${check.status} for word ${word.id} anchor ${idx}`);
-          allWorked = false;
-          break;
-        }
+        const imageBuffer = await generateImageWithImagen(prompt);
+        const filename = `word-${word.id}-anchor-${idx}.png`;
+        const filepath = join(imagesDir, filename);
+        writeFileSync(filepath, imageBuffer);
+        anchors[idx] = { ...anchor, image_url: `/images/${filename}` };
+        anyGenerated = true;
+        console.log(`Generated Imagen image for word ${word.id} anchor ${idx}`);
       } catch (err) {
-        console.log(`Pollinations fetch failed for word ${word.id}: ${err.message}`);
-        allWorked = false;
-        break;
+        console.log(`Imagen generation failed for word ${word.id} anchor ${idx}: ${err.message}`);
+        // Continue with remaining anchors instead of breaking
       }
-
-      // 2s delay between requests to avoid rate limits
-      if (idx < anchors.length - 1) await new Promise(r => setTimeout(r, 2000));
     }
 
-    // Only save to DB if all images verified
-    if (allWorked && anchors[0]?.image_url) {
+    // Save to DB if any images were generated
+    if (anyGenerated) {
       await pool.query('UPDATE words SET visual_anchors = $1 WHERE id = $2', [JSON.stringify(anchors), word.id]);
     }
 
@@ -399,6 +426,178 @@ app.post('/api/words/:id/generate-images', async (req, res) => {
   } catch (err) {
     console.error('Generate images error:', err);
     res.status(500).json({ error: 'Failed to generate images' });
+  }
+});
+
+// ── Generate Picture Hint ──
+app.post('/api/words/:id/picture-hint', authMiddleware, async (req, res) => {
+  try {
+    const wordResult = await pool.query('SELECT * FROM words WHERE id = $1 AND approved = true', [req.params.id]);
+    if (wordResult.rows.length === 0) return res.status(404).json({ error: 'Word not found' });
+
+    const word = wordResult.rows[0];
+    const filename = `hint-${word.id}.png`;
+    const filepath = join(imagesDir, filename);
+    const imageUrl = `/images/${filename}`;
+
+    // Return cached if exists
+    if (existsSync(filepath)) {
+      return res.json({ image_url: imageUrl });
+    }
+
+    const prompt = `A vivid, colourful children's book illustration that captures the meaning of the word "${word.word}" (${word.definition}). Friendly, whimsical watercolour style, no text or words in the image.`;
+    const imageBuffer = await generateImageWithImagen(prompt);
+    writeFileSync(filepath, imageBuffer);
+    console.log(`Generated picture hint for word "${word.word}"`);
+
+    res.json({ image_url: imageUrl });
+  } catch (err) {
+    console.error('Picture hint error:', err);
+    res.status(500).json({ error: 'Failed to generate picture hint' });
+  }
+});
+
+// ── Text Prompt: generate a situation description ──
+app.post('/api/words/:id/text-prompt', authMiddleware, async (req, res) => {
+  try {
+    const wordResult = await pool.query('SELECT * FROM words WHERE id = $1 AND approved = true', [req.params.id]);
+    if (wordResult.rows.length === 0) return res.status(404).json({ error: 'Word not found' });
+
+    const word = wordResult.rows[0];
+    const profileCtx = await getProfileContext(req.user.userId);
+    const personalisation = profileCtx
+      ? `\n\nThe student's interests: ${profileCtx}\nTry to relate the scenario to their interests when possible.`
+      : '';
+
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const anthropic = new Anthropic();
+    const msg = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 200,
+      messages: [{ role: 'user', content: `You are helping a 10-year-old student practice vocabulary for the UK 11+ exam.
+
+The word is: "${word.word}" (${word.definition})${personalisation}
+
+Write a short, vivid scenario (2-3 sentences) describing a situation where the word "${word.word}" would be the perfect word to use. Do NOT use the word "${word.word}" anywhere in the scenario — the student must figure out the word fits and rewrite the scenario using it.
+
+Write at a level appropriate for a 9-10 year old. Make the scenario relatable and interesting for a child.
+
+Return ONLY the scenario text, nothing else.` }],
+    });
+
+    const scenario = msg.content[0]?.text?.trim() || '';
+    res.json({ scenario });
+  } catch (err) {
+    console.error('Text prompt error:', err);
+    res.status(500).json({ error: 'Failed to generate text prompt' });
+  }
+});
+
+// ── Picture Prompt: generate a scene image ──
+app.post('/api/words/:id/picture-prompt', authMiddleware, async (req, res) => {
+  try {
+    const wordResult = await pool.query('SELECT * FROM words WHERE id = $1 AND approved = true', [req.params.id]);
+    if (wordResult.rows.length === 0) return res.status(404).json({ error: 'Word not found' });
+
+    const word = wordResult.rows[0];
+
+    // First generate a scene description with Claude
+    const profileCtx = await getProfileContext(req.user.userId);
+    const personalisation = profileCtx
+      ? ` Relate the scene to the student's interests if possible: ${profileCtx}`
+      : '';
+
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const anthropic = new Anthropic();
+    const msg = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 100,
+      messages: [{ role: 'user', content: `Describe a vivid visual scene (one sentence, max 20 words) that perfectly illustrates the meaning of the word "${word.word}" (${word.definition}). The scene should be suitable for a children's illustration.${personalisation} Return ONLY the scene description.` }],
+    });
+
+    const sceneDescription = msg.content[0]?.text?.trim() || '';
+
+    // Generate the image
+    const filename = `prompt-${word.id}-${Date.now()}.png`;
+    const filepath = join(imagesDir, filename);
+    const imageUrl = `/images/${filename}`;
+
+    const imagePrompt = `A detailed, colourful children's book illustration: ${sceneDescription}. Vivid watercolour style, expressive characters, rich details to describe, no text or words in the image.`;
+    const imageBuffer = await generateImageWithImagen(imagePrompt);
+    writeFileSync(filepath, imageBuffer);
+    console.log(`Generated picture prompt for word "${word.word}": ${sceneDescription}`);
+
+    res.json({ image_url: imageUrl, scene: sceneDescription });
+  } catch (err) {
+    console.error('Picture prompt error:', err);
+    res.status(500).json({ error: 'Failed to generate picture prompt' });
+  }
+});
+
+// ── Related Words Matching Game ──
+app.post('/api/words/:id/related-match', authMiddleware, async (req, res) => {
+  try {
+    const wordResult = await pool.query('SELECT * FROM words WHERE id = $1 AND approved = true', [req.params.id]);
+    if (wordResult.rows.length === 0) return res.status(404).json({ error: 'Word not found' });
+
+    const word = wordResult.rows[0];
+    const relatedIds = new Set([word.id]);
+    const related = [{ id: word.id, word: word.word, definition: word.definition }];
+
+    // 1. Synonyms & antonyms
+    const allRelated = [...(word.synonyms || []), ...(word.antonyms || [])];
+    if (allRelated.length > 0) {
+      const synResult = await pool.query(
+        'SELECT id, word, definition FROM words WHERE approved = true AND word = ANY($1)',
+        [allRelated]
+      );
+      for (const r of synResult.rows) {
+        if (!relatedIds.has(r.id)) { relatedIds.add(r.id); related.push(r); }
+      }
+    }
+
+    // 2. Same category words
+    if (related.length < 8 && word.category) {
+      const catResult = await pool.query(
+        'SELECT id, word, definition FROM words WHERE approved = true AND category = $1 AND id != $2 ORDER BY RANDOM() LIMIT $3',
+        [word.category, word.id, 8 - related.length]
+      );
+      for (const r of catResult.rows) {
+        if (!relatedIds.has(r.id)) { relatedIds.add(r.id); related.push(r); }
+      }
+    }
+
+    // 3. Similar sounding/written words (fuzzy match on first 3 chars or same length ±1)
+    if (related.length < 8) {
+      const prefix = word.word.slice(0, 3);
+      const simResult = await pool.query(
+        `SELECT id, word, definition FROM words WHERE approved = true AND id != $1 AND (
+          word ILIKE $2 OR ABS(LENGTH(word) - LENGTH($3)) <= 1
+        ) ORDER BY RANDOM() LIMIT $4`,
+        [word.id, prefix + '%', word.word, 8 - related.length]
+      );
+      for (const r of simResult.rows) {
+        if (!relatedIds.has(r.id)) { relatedIds.add(r.id); related.push(r); }
+      }
+    }
+
+    // 4. Fill remaining with random words
+    if (related.length < 6) {
+      const ids = Array.from(relatedIds);
+      const fillResult = await pool.query(
+        `SELECT id, word, definition FROM words WHERE approved = true AND id != ALL($1) ORDER BY RANDOM() LIMIT $2`,
+        [ids, 6 - related.length]
+      );
+      for (const r of fillResult.rows) {
+        if (!relatedIds.has(r.id)) { relatedIds.add(r.id); related.push(r); }
+      }
+    }
+
+    // Cap at 8
+    res.json({ words: related.slice(0, 8) });
+  } catch (err) {
+    console.error('Related match error:', err);
+    res.status(500).json({ error: 'Failed to fetch related words' });
   }
 });
 
@@ -436,6 +635,25 @@ app.get('/api/words/:id/quotes', async (req, res) => {
       return res.json({ quotes: cached });
     }
 
+    // Try to get profile context from auth header
+    let profileCtx = null;
+    try {
+      const authHeader = req.headers.authorization;
+      if (authHeader) {
+        const jwt = await import('jsonwebtoken');
+        const token = authHeader.split(' ')[1];
+        const decoded = jwt.default.verify(token, process.env.JWT_SECRET);
+        profileCtx = await getProfileContext(decoded.userId);
+      }
+    } catch {}
+
+    const favouriteBooks = profileCtx && profileCtx.includes('Favourite books:')
+      ? profileCtx.match(/Favourite books: ([^.]+)/)?.[1] || ''
+      : '';
+    const bookSuggestions = favouriteBooks
+      ? `Use these books if possible: ${favouriteBooks}. Fill remaining slots from: Harry Potter, Matilda, Charlie and the Chocolate Factory, The BFG, Narnia, Percy Jackson, Diary of a Wimpy Kid, Tom Gates, etc.`
+      : `One MUST be from Harry Potter\n- Others from books like: Matilda, Charlie and the Chocolate Factory, The BFG, Narnia, Percy Jackson, Diary of a Wimpy Kid, Tom Gates, etc.`;
+
     const Anthropic = (await import('@anthropic-ai/sdk')).default;
     const anthropic = new Anthropic();
 
@@ -445,8 +663,7 @@ app.get('/api/words/:id/quotes', async (req, res) => {
       messages: [{ role: 'user', content: `Create exactly 5 short example sentences using the word "${word.word}" (meaning: ${word.definition}) as if they come from famous children's books. Each sentence should sound like it belongs in that book's world and use the word naturally.
 
 Rules:
-- One MUST be from Harry Potter
-- Others from books like: Matilda, Charlie and the Chocolate Factory, The BFG, Narnia, Percy Jackson, Diary of a Wimpy Kid, Tom Gates, etc.
+- ${bookSuggestions}
 - Keep sentences short (1-2 sentences max) and suitable for 9-10 year olds
 - The word must be used correctly in context
 - Return EXACTLY 5 quotes
@@ -476,6 +693,26 @@ Respond as JSON array:
 // ── Text-to-Speech via Google Cloud ──
 let cachedVoices = null;
 
+// Curated British voices with natural human names
+const VOICE_NAMES = {
+  'en-GB-Studio-B':    { displayName: 'James',     quality: 'Premium' },
+  'en-GB-Studio-C':    { displayName: 'Charlotte',  quality: 'Premium' },
+  'en-GB-Neural2-A':   { displayName: 'Sophie',     quality: 'Natural' },
+  'en-GB-Neural2-B':   { displayName: 'Oliver',     quality: 'Natural' },
+  'en-GB-Neural2-C':   { displayName: 'Emily',      quality: 'Natural' },
+  'en-GB-Neural2-D':   { displayName: 'William',    quality: 'Natural' },
+  'en-GB-Neural2-F':   { displayName: 'Amelia',     quality: 'Natural' },
+  'en-GB-Neural2-N':   { displayName: 'Isabella',   quality: 'Natural' },
+  'en-GB-Neural2-O':   { displayName: 'Henry',      quality: 'Natural' },
+  'en-GB-Wavenet-A':   { displayName: 'Eleanor',    quality: 'Clear' },
+  'en-GB-Wavenet-B':   { displayName: 'Thomas',     quality: 'Clear' },
+  'en-GB-Wavenet-C':   { displayName: 'Grace',      quality: 'Clear' },
+  'en-GB-Wavenet-D':   { displayName: 'George',     quality: 'Clear' },
+  'en-GB-Wavenet-F':   { displayName: 'Alice',      quality: 'Clear' },
+  'en-GB-Wavenet-N':   { displayName: 'Florence',   quality: 'Clear' },
+  'en-GB-Wavenet-O':   { displayName: 'Edward',     quality: 'Clear' },
+};
+
 app.get('/api/tts/voices', async (req, res) => {
   try {
     if (cachedVoices) return res.json({ voices: cachedVoices });
@@ -488,19 +725,17 @@ app.get('/api/tts/voices', async (req, res) => {
 
     const data = await response.json();
     const voices = (data.voices || [])
-      .filter(v => v.languageCodes.some(lc => lc === 'en-GB'))
-      .map((v, i) => {
+      .filter(v => v.languageCodes.some(lc => lc === 'en-GB') && VOICE_NAMES[v.name])
+      .map(v => {
+        const info = VOICE_NAMES[v.name];
         const gender = v.ssmlGender;
-        const type = v.name.includes('Wavenet') ? 'Wavenet' : v.name.includes('Neural2') ? 'Neural2' : v.name.includes('Studio') ? 'Studio' : v.name.includes('Journey') ? 'Journey' : 'Standard';
-        const shortName = v.name.replace('en-GB-', '').replace('Chirp3-HD-', '').replace('Chirp-HD-', '');
-        const avatarSeed = v.name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
-        const genderWord = gender === 'MALE' ? 'male' : 'female';
-        const avatarUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(`portrait photo, friendly British ${genderWord} voice actor, professional headshot, warm smile, studio lighting`)}&width=128&height=128&nologo=true&seed=${avatarSeed}`;
-        return { name: v.name, shortName, gender, language: v.languageCodes[0], type, avatarUrl };
+        const avatarBg = gender === 'MALE' ? '4a90d9' : 'd94a8a';
+        const avatarUrl = `https://ui-avatars.com/api/?name=${encodeURIComponent(info.displayName)}&background=${avatarBg}&color=fff&size=128&rounded=true&bold=true`;
+        return { name: v.name, displayName: info.displayName, quality: info.quality, gender, language: v.languageCodes[0], avatarUrl };
       })
       .sort((a, b) => {
-        const typeOrder = { Studio: 0, Neural2: 1, Wavenet: 2, Standard: 3 };
-        return (typeOrder[a.type] ?? 5) - (typeOrder[b.type] ?? 5) || a.name.localeCompare(b.name);
+        const qualityOrder = { Premium: 0, Natural: 1, Clear: 2 };
+        return (qualityOrder[a.quality] ?? 5) - (qualityOrder[b.quality] ?? 5) || a.displayName.localeCompare(b.displayName);
       });
 
     cachedVoices = voices;
@@ -546,6 +781,65 @@ app.post('/api/tts', async (req, res) => {
   }
 });
 
+// ── Speech-to-Text via Google Cloud ──
+app.post('/api/stt', authMiddleware, async (req, res) => {
+  try {
+    const { audio } = req.body;
+    if (!audio) return res.status(400).json({ error: 'Audio data required' });
+
+    const apiKey = process.env.GOOGLE_TTS_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'Speech-to-text not configured' });
+
+    const response = await fetch(`https://speech.googleapis.com/v1/speech:recognize?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config: {
+          encoding: 'WEBM_OPUS',
+          sampleRateHertz: 48000,
+          languageCode: 'en-GB',
+          model: 'latest_long',
+          enableAutomaticPunctuation: true,
+        },
+        audio: { content: audio },
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      console.error('Google STT error:', err);
+      return res.status(500).json({ error: 'Speech recognition failed' });
+    }
+
+    const data = await response.json();
+    const rawTranscript = data.results
+      ?.map(r => r.alternatives?.[0]?.transcript)
+      .filter(Boolean)
+      .join(' ') || '';
+
+    if (!rawTranscript) return res.json({ transcript: '' });
+
+    // Post-process with Claude for proper capitalisation and punctuation
+    try {
+      const Anthropic = (await import('@anthropic-ai/sdk')).default;
+      const anthropic = new Anthropic();
+      const msg = await anthropic.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: `Fix the capitalisation and punctuation of this dictated sentence. Only return the corrected sentence, nothing else. Do not change any words, only fix capitalisation (start of sentence, proper nouns) and add punctuation marks (full stops, commas, question marks, exclamation marks) where needed.\n\n${rawTranscript}` }],
+      });
+      const cleaned = msg.content[0]?.text?.trim();
+      res.json({ transcript: cleaned || rawTranscript });
+    } catch (err) {
+      console.log('Claude post-processing failed, returning raw transcript:', err.message);
+      res.json({ transcript: rawTranscript });
+    }
+  } catch (err) {
+    console.error('STT error:', err);
+    res.status(500).json({ error: 'Speech recognition failed' });
+  }
+});
+
 // Seed endpoint (one-time use)
 app.post('/api/seed', async (req, res) => {
   try {
@@ -563,6 +857,224 @@ app.post('/api/seed', async (req, res) => {
   } catch (err) {
     console.error('Seed error:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ── User Profile CRUD ──
+app.get('/api/profile', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query('SELECT * FROM user_profiles WHERE user_id = $1', [req.user.userId]);
+    res.json({ profile: result.rows[0] || null });
+  } catch (err) {
+    console.error('Profile fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch profile' });
+  }
+});
+
+app.put('/api/profile', authMiddleware, async (req, res) => {
+  try {
+    const { year_of_birth, gender, countries, places_people, about_me, books, tv_shows, youtube_interests } = req.body;
+    const result = await pool.query(`
+      INSERT INTO user_profiles (user_id, year_of_birth, gender, countries, places_people, about_me, books, tv_shows, youtube_interests, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
+      ON CONFLICT (user_id) DO UPDATE SET
+        year_of_birth = COALESCE($2, user_profiles.year_of_birth),
+        gender = COALESCE($3, user_profiles.gender),
+        countries = COALESCE($4, user_profiles.countries),
+        places_people = COALESCE($5, user_profiles.places_people),
+        about_me = COALESCE($6, user_profiles.about_me),
+        books = COALESCE($7, user_profiles.books),
+        tv_shows = COALESCE($8, user_profiles.tv_shows),
+        youtube_interests = COALESCE($9, user_profiles.youtube_interests),
+        updated_at = NOW()
+      RETURNING *
+    `, [req.user.userId, year_of_birth || null, gender || null, countries || [], places_people || [], about_me || null, books ? JSON.stringify(books) : null, tv_shows ? JSON.stringify(tv_shows) : null, youtube_interests || []]);
+    res.json({ profile: result.rows[0] });
+  } catch (err) {
+    console.error('Profile save error:', err);
+    res.status(500).json({ error: 'Failed to save profile' });
+  }
+});
+
+// ── Helper: get user profile interests string for prompts ──
+async function getProfileContext(userId) {
+  try {
+    const result = await pool.query('SELECT * FROM user_profiles WHERE user_id = $1', [userId]);
+    if (!result.rows[0]) return null;
+    const p = result.rows[0];
+    const parts = [];
+    if (p.books && Array.isArray(p.books) && p.books.length > 0) {
+      const bookTitles = p.books.map(b => b.title).filter(Boolean);
+      if (bookTitles.length) parts.push(`Favourite books: ${bookTitles.join(', ')}`);
+    }
+    if (p.tv_shows && Array.isArray(p.tv_shows) && p.tv_shows.length > 0) {
+      const showTitles = p.tv_shows.map(s => s.title).filter(Boolean);
+      if (showTitles.length) parts.push(`Favourite TV/films: ${showTitles.join(', ')}`);
+    }
+    if (p.places_people && p.places_people.length > 0) {
+      parts.push(`Loves: ${p.places_people.join(', ')}`);
+    }
+    if (p.youtube_interests && p.youtube_interests.length > 0) {
+      parts.push(`YouTube interests: ${p.youtube_interests.join(', ')}`);
+    }
+    if (p.about_me) parts.push(`About them: ${p.about_me}`);
+    if (p.year_of_birth) parts.push(`Age: approximately ${new Date().getFullYear() - p.year_of_birth} years old`);
+    return parts.length > 0 ? parts.join('. ') + '.' : null;
+  } catch { return null; }
+}
+
+// ── Learning Schedule ──
+app.get('/api/schedule', authMiddleware, async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    const m = parseInt(month) || (new Date().getMonth() + 1);
+    const y = parseInt(year) || new Date().getFullYear();
+    const startDate = `${y}-${String(m).padStart(2, '0')}-01`;
+    const lastDayObj = new Date(y, m, 0);
+    const endDate = `${y}-${String(m).padStart(2, '0')}-${String(lastDayObj.getDate()).padStart(2, '0')}`;
+
+    const result = await pool.query(`
+      SELECT ls.*, w.word, w.definition, w.difficulty, w.visual_emoji, w.category,
+             p.status as progress_status
+      FROM learning_schedule ls
+      JOIN words w ON w.id = ls.word_id
+      LEFT JOIN progress p ON p.user_id = ls.user_id AND p.word_id = ls.word_id
+      WHERE ls.user_id = $1 AND ls.scheduled_date BETWEEN $2 AND $3
+      ORDER BY ls.scheduled_date, w.difficulty, w.word
+    `, [req.user.userId, startDate, endDate]);
+
+    res.json({ schedule: result.rows });
+  } catch (err) {
+    console.error('Schedule fetch error:', err);
+    res.status(500).json({ error: 'Failed to fetch schedule' });
+  }
+});
+
+app.post('/api/schedule/generate', authMiddleware, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+
+    // Get words already scheduled for this user
+    const scheduledResult = await pool.query(
+      'SELECT word_id FROM learning_schedule WHERE user_id = $1', [userId]
+    );
+    const scheduledIds = new Set(scheduledResult.rows.map(r => r.word_id));
+
+    // Get words already mastered
+    const masteredResult = await pool.query(
+      "SELECT word_id FROM progress WHERE user_id = $1 AND status = 'mastered'", [userId]
+    );
+    const masteredIds = new Set(masteredResult.rows.map(r => r.word_id));
+
+    // Get all approved words sorted by difficulty then alphabetical
+    const wordsResult = await pool.query(
+      'SELECT id FROM words WHERE approved = true ORDER BY difficulty ASC, word ASC'
+    );
+
+    // Filter to unscheduled, non-mastered words
+    const available = wordsResult.rows
+      .filter(w => !scheduledIds.has(w.id) && !masteredIds.has(w.id))
+      .map(w => w.id);
+
+    if (available.length === 0) {
+      return res.json({ scheduled: 0, message: 'All words are already scheduled or mastered!' });
+    }
+
+    // Find the last scheduled date for this user, or use today
+    const lastDateResult = await pool.query(
+      'SELECT MAX(scheduled_date) as last_date FROM learning_schedule WHERE user_id = $1', [userId]
+    );
+    let startDate;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    if (lastDateResult.rows[0]?.last_date) {
+      const lastDate = new Date(lastDateResult.rows[0].last_date);
+      startDate = lastDate >= today ? new Date(lastDate.getTime() + 86400000) : today;
+    } else {
+      startDate = today;
+    }
+
+    // Schedule 7 words per day
+    const WORDS_PER_DAY = 7;
+    let scheduled = 0;
+    const values = [];
+    const params = [];
+    let paramIdx = 1;
+
+    for (let i = 0; i < available.length; i++) {
+      const dayOffset = Math.floor(i / WORDS_PER_DAY);
+      const date = new Date(startDate.getTime() + dayOffset * 86400000);
+      const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      values.push(`($${paramIdx}, $${paramIdx + 1}, $${paramIdx + 2})`);
+      params.push(userId, available[i], dateStr);
+      paramIdx += 3;
+      scheduled++;
+    }
+
+    if (values.length > 0) {
+      await pool.query(
+        `INSERT INTO learning_schedule (user_id, word_id, scheduled_date)
+         VALUES ${values.join(', ')}
+         ON CONFLICT (user_id, word_id) DO NOTHING`,
+        params
+      );
+    }
+
+    res.json({ scheduled, days: Math.ceil(scheduled / WORDS_PER_DAY) });
+  } catch (err) {
+    console.error('Schedule generate error:', err);
+    res.status(500).json({ error: 'Failed to generate schedule' });
+  }
+});
+
+app.put('/api/schedule/swap', authMiddleware, async (req, res) => {
+  try {
+    const { oldWordId, newWordId, date } = req.body;
+    const userId = req.user.userId;
+
+    // Remove old word from this date
+    await pool.query(
+      'DELETE FROM learning_schedule WHERE user_id = $1 AND word_id = $2 AND scheduled_date = $3',
+      [userId, oldWordId, date]
+    );
+    // Add new word to this date
+    await pool.query(
+      `INSERT INTO learning_schedule (user_id, word_id, scheduled_date)
+       VALUES ($1, $2, $3) ON CONFLICT (user_id, word_id) DO UPDATE SET scheduled_date = $3`,
+      [userId, newWordId, date]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Schedule swap error:', err);
+    res.status(500).json({ error: 'Failed to swap word' });
+  }
+});
+
+app.delete('/api/schedule', authMiddleware, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM learning_schedule WHERE user_id = $1', [req.user.userId]);
+    res.json({ success: true });
+  } catch (err) {
+    console.error('Schedule delete error:', err);
+    res.status(500).json({ error: 'Failed to delete schedule' });
+  }
+});
+
+app.get('/api/schedule/unscheduled', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT w.id, w.word, w.definition, w.difficulty, w.visual_emoji, w.category
+      FROM words w
+      WHERE w.approved = true
+        AND w.id NOT IN (SELECT word_id FROM learning_schedule WHERE user_id = $1)
+        AND w.id NOT IN (SELECT word_id FROM progress WHERE user_id = $1 AND status = 'mastered')
+      ORDER BY w.difficulty ASC, w.word ASC
+    `, [req.user.userId]);
+    res.json({ words: result.rows });
+  } catch (err) {
+    console.error('Unscheduled words error:', err);
+    res.status(500).json({ error: 'Failed to fetch unscheduled words' });
   }
 });
 

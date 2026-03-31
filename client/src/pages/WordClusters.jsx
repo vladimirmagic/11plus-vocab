@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api.js';
+import { LinkedText } from '../WordsContext.jsx';
 
 export default function WordClusters() {
   const [words, setWords] = useState([]);
@@ -207,7 +208,7 @@ export default function WordClusters() {
           {cluster.center.definition && (
             <div className="card" style={{ marginTop: '1rem' }}>
               <h3>{cluster.center.visual_emoji} {cluster.center.word}</h3>
-              <p>{cluster.center.definition}</p>
+              <p><LinkedText text={cluster.center.definition} skipWord={cluster.center.word} /></p>
             </div>
           )}
         </>

@@ -491,6 +491,10 @@ input:focus, textarea:focus, select:focus {
   25% { transform: translateX(-4px); }
   75% { transform: translateX(4px); }
 }
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.1); }
+}
 
 /* Sentence builder */
 .sentence-area {

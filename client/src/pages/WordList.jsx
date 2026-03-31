@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
+import { LinkedText } from '../WordsContext.jsx';
 
 export default function WordList({ onNavigate, initialSearch }) {
   const { user } = useAuth();
@@ -106,7 +107,7 @@ export default function WordList({ onNavigate, initialSearch }) {
             >
               <div className="card-emoji">{word.visual_emoji}</div>
               <div className="card-word">{word.word}</div>
-              <div className="card-definition">{truncate(word.definition)}</div>
+              <div className="card-definition"><LinkedText text={truncate(word.definition)} skipWord={word.word} /></div>
               <div className="card-footer">
                 <span className="card-category">{word.category}</span>
                 {getStatusBadge(word.id)}

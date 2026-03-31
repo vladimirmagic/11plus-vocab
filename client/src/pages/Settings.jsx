@@ -68,8 +68,8 @@ export default function Settings() {
     }
   }
 
-  const types = ['all', ...new Set(voices.map(v => v.type))];
-  const filtered = filter === 'all' ? voices : voices.filter(v => v.type === filter);
+  const qualities = ['all', ...new Set(voices.map(v => v.quality))];
+  const filtered = filter === 'all' ? voices : voices.filter(v => v.quality === filter);
 
   const genderIcon = (g) => g === 'MALE' ? '👨' : '👩';
 
@@ -91,13 +91,13 @@ export default function Settings() {
       )}
 
       <div className="category-pills" style={{ marginBottom: 16 }}>
-        {types.map(t => (
+        {qualities.map(q => (
           <button
-            key={t}
-            className={`category-pill${filter === t ? ' active' : ''}`}
-            onClick={() => setFilter(t)}
+            key={q}
+            className={`category-pill${filter === q ? ' active' : ''}`}
+            onClick={() => setFilter(q)}
           >
-            {t === 'all' ? `All (${voices.length})` : `${t} (${voices.filter(v => v.type === t).length})`}
+            {q === 'all' ? `All (${voices.length})` : `${q} (${voices.filter(v => v.quality === q).length})`}
           </button>
         ))}
       </div>
@@ -135,7 +135,7 @@ export default function Settings() {
             }}>
               <img
                 src={v.avatarUrl}
-                alt={v.shortName}
+                alt={v.displayName}
                 style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                 onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = genderIcon(v.gender); }}
               />
@@ -144,11 +144,11 @@ export default function Settings() {
             {/* Info */}
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontWeight: 700, fontSize: 15 }}>
-                {v.shortName}
-                {selectedVoice === v.name && <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--green)' }}>Selected</span>}
+                {v.displayName}
+                {selectedVoice === v.name && <span style={{ marginLeft: 8, fontSize: 12, color: 'var(--green)' }}>✓ Selected</span>}
               </div>
               <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
-                {v.gender === 'MALE' ? 'Male' : 'Female'} &middot; {v.type}
+                {v.gender === 'MALE' ? 'Male' : 'Female'} · {v.quality}
               </div>
             </div>
 

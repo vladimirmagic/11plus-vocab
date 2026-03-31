@@ -1,20 +1,21 @@
 import React, { useState, useCallback } from 'react';
 import { useAuth } from './AuthContext.jsx';
+import { WordsProvider } from './WordsContext.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import WordList from './pages/WordList.jsx';
 import WordDetail from './pages/WordDetail.jsx';
 import WordClusters from './pages/WordClusters.jsx';
-import MatchingGame from './pages/MatchingGame.jsx';
-import SentenceBuilder from './pages/SentenceBuilder.jsx';
 import AdminPanel from './pages/AdminPanel.jsx';
 import Settings from './pages/Settings.jsx';
+import Calendar from './pages/Calendar.jsx';
+import Profile from './pages/Profile.jsx';
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
+  { id: 'calendar', label: 'Calendar', icon: '📅' },
   { id: 'words', label: 'Word List', icon: '📚' },
   { id: 'clusters', label: 'Word Clusters', icon: '🕸️' },
-  { id: 'matching', label: 'Matching Game', icon: '🎯' },
-  { id: 'sentences', label: 'Sentence Builder', icon: '✍️' },
+  { id: 'profile', label: 'My Profile', icon: '👤' },
   { id: 'settings', label: 'Settings', icon: '🔧' },
 ];
 
@@ -116,9 +117,9 @@ export default function App() {
       case 'dashboard': return <Dashboard onNavigate={handleNavigate} />;
       case 'words': return <WordList onNavigate={handleNavigate} initialSearch={tabParam || ''} />;
       case 'word': return <WordDetail wordId={tabParam} onNavigate={handleNavigate} />;
+      case 'calendar': return <Calendar onNavigate={handleNavigate} />;
       case 'clusters': return <WordClusters />;
-      case 'matching': return <MatchingGame />;
-      case 'sentences': return <SentenceBuilder />;
+      case 'profile': return <Profile />;
       case 'settings': return <Settings />;
       case 'admin': return user.role === 'admin' ? <AdminPanel /> : <Dashboard onNavigate={handleNavigate} />;
       default: return <Dashboard onNavigate={handleNavigate} />;
@@ -126,6 +127,7 @@ export default function App() {
   };
 
   return (
+    <WordsProvider onNavigate={handleNavigate}>
     <div className="app-layout">
       {/* Mobile header */}
       <div className="mobile-header">
@@ -186,5 +188,6 @@ export default function App() {
         {renderPage()}
       </main>
     </div>
+    </WordsProvider>
   );
 }

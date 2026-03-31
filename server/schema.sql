@@ -65,3 +65,30 @@ DO $$ BEGIN
   ALTER TABLE words ADD COLUMN quotes JSONB DEFAULT '[]';
 EXCEPTION WHEN duplicate_column THEN NULL;
 END $$;
+
+-- Learning schedule table
+CREATE TABLE IF NOT EXISTS learning_schedule (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  word_id INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
+  scheduled_date DATE NOT NULL,
+  completed BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, word_id)
+);
+CREATE INDEX IF NOT EXISTS idx_schedule_user_date ON learning_schedule(user_id, scheduled_date);
+
+-- User profiles table
+CREATE TABLE IF NOT EXISTS user_profiles (
+  user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  year_of_birth INTEGER,
+  gender VARCHAR(30),
+  countries TEXT[] DEFAULT '{}',
+  places_people TEXT[] DEFAULT '{}',
+  about_me TEXT,
+  books JSONB DEFAULT '[]',
+  tv_shows JSONB DEFAULT '[]',
+  youtube_interests TEXT[] DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
