@@ -488,15 +488,18 @@ app.get('/api/tts/voices', async (req, res) => {
 
     const data = await response.json();
     const voices = (data.voices || [])
-      .filter(v => v.languageCodes.some(lc => lc.startsWith('en-')))
-      .map(v => ({
-        name: v.name,
-        gender: v.ssmlGender,
-        language: v.languageCodes[0],
-        type: v.name.includes('Wavenet') ? 'Wavenet' : v.name.includes('Neural2') ? 'Neural2' : v.name.includes('Studio') ? 'Studio' : v.name.includes('Journey') ? 'Journey' : 'Standard',
-      }))
+      .filter(v => v.languageCodes.some(lc => lc === 'en-GB'))
+      .map((v, i) => {
+        const gender = v.ssmlGender;
+        const type = v.name.includes('Wavenet') ? 'Wavenet' : v.name.includes('Neural2') ? 'Neural2' : v.name.includes('Studio') ? 'Studio' : v.name.includes('Journey') ? 'Journey' : 'Standard';
+        const shortName = v.name.replace('en-GB-', '').replace('Chirp3-HD-', '').replace('Chirp-HD-', '');
+        const avatarSeed = v.name.split('').reduce((a, c) => a + c.charCodeAt(0), 0);
+        const genderWord = gender === 'MALE' ? 'male' : 'female';
+        const avatarUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(`portrait photo, friendly British ${genderWord} voice actor, professional headshot, warm smile, studio lighting`)}&width=128&height=128&nologo=true&seed=${avatarSeed}`;
+        return { name: v.name, shortName, gender, language: v.languageCodes[0], type, avatarUrl };
+      })
       .sort((a, b) => {
-        const typeOrder = { Journey: 0, Studio: 1, Neural2: 2, Wavenet: 3, Standard: 4 };
+        const typeOrder = { Studio: 0, Neural2: 1, Wavenet: 2, Standard: 3 };
         return (typeOrder[a.type] ?? 5) - (typeOrder[b.type] ?? 5) || a.name.localeCompare(b.name);
       });
 
