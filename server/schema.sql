@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS learning_schedule (
 );
 CREATE INDEX IF NOT EXISTS idx_schedule_user_date ON learning_schedule(user_id, scheduled_date);
 
+-- Migration: add unique constraint on email
+DO $$ BEGIN
+  CREATE UNIQUE INDEX idx_users_email ON users(email) WHERE email IS NOT NULL;
+EXCEPTION WHEN duplicate_table THEN NULL;
+END $$;
+
 -- User profiles table
 CREATE TABLE IF NOT EXISTS user_profiles (
   user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -92,3 +98,53 @@ CREATE TABLE IF NOT EXISTS user_profiles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- ── Gamification tables ──
+
+CREATE TABLE IF NOT EXISTS exercise_history (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  word_id INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
+  exercise_type VARCHAR(30) NOT NULL,
+  correct BOOLEAN NOT NULL,
+  points_earned INTEGER NOT NULL DEFAULT 0,
+  session_id UUID NOT NULL,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_history_user_date ON exercise_history(user_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_history_session ON exercise_history(session_id);
+
+CREATE TABLE IF NOT EXISTS point_events (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  points INTEGER NOT NULL,
+  reason VARCHAR(50) NOT NULL,
+  exercise_history_id INTEGER REFERENCES exercise_history(id),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_points_user_date ON point_events(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS achievements (
+  id SERIAL PRIMARY KEY,
+  key VARCHAR(50) UNIQUE NOT NULL,
+  title VARCHAR(100) NOT NULL,
+  description TEXT NOT NULL,
+  emoji VARCHAR(10) NOT NULL,
+  threshold INTEGER,
+  category VARCHAR(30) NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_achievements (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  achievement_id INTEGER NOT NULL REFERENCES achievements(id),
+  unlocked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(user_id, achievement_id)
+);
+
+-- Migration: add streak_freezes to users
+DO $$ BEGIN
+  ALTER TABLE users ADD COLUMN streak_freezes INTEGER DEFAULT 0;
+EXCEPTION WHEN duplicate_column THEN NULL;
+END $$;
