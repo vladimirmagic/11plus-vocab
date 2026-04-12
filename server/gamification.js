@@ -11,14 +11,14 @@ const POINTS = {
 const STREAK_BONUS_INTERVAL = 5;   // every 5 correct in a row
 const STREAK_BONUS_POINTS   = 10;
 
-// ── Tree stages ──
+// ── Tree stages (matching design spec) ──
 const TREE_STAGES = [
-  { stage: 1, name: 'Seed',          minPoints: 0 },
-  { stage: 2, name: 'Sprout',        minPoints: 200 },
-  { stage: 3, name: 'Sapling',       minPoints: 1000 },
-  { stage: 4, name: 'Young Tree',    minPoints: 3000 },
-  { stage: 5, name: 'Mighty Oak',    minPoints: 8000 },
-  { stage: 6, name: 'Ancient Tree',  minPoints: 20000 },
+  { stage: 1, name: 'Seed',        minPoints: 0 },
+  { stage: 2, name: 'Sprout',      minPoints: 50 },
+  { stage: 3, name: 'Sapling',     minPoints: 200 },
+  { stage: 4, name: 'Young Tree',  minPoints: 500 },
+  { stage: 5, name: 'Full Tree',   minPoints: 1000 },
+  { stage: 6, name: 'Grand Tree',  minPoints: 2000 },
 ];
 
 /**
@@ -42,26 +42,25 @@ export async function recordExercise({ userId, wordId, exerciseType, correct, se
     `, [userId, wordId, exerciseType, correct, basePoints, sessionId, JSON.stringify(metadata)]);
     const historyId = historyResult.rows[0].id;
 
-    // Insert base point event
+    // Insert base point event with exercise-type-specific reason
+    const reason = `${exerciseType}_${correct ? 'correct' : 'wrong'}`;
     await client.query(`
       INSERT INTO point_events (user_id, points, reason, exercise_history_id)
       VALUES ($1, $2, $3, $4)
-    `, [userId, basePoints, correct ? 'correct_answer' : 'wrong_answer', historyId]);
+    `, [userId, basePoints, reason, historyId]);
 
     // Check streak bonus (every N correct in a row)
     let bonusPoints = 0;
     if (correct) {
       const streakResult = await client.query(`
-        SELECT COUNT(*) as streak FROM (
-          SELECT correct FROM exercise_history
-          WHERE user_id = $1
-          ORDER BY created_at DESC
-          LIMIT $2
-        ) recent
-        WHERE correct = true
+        SELECT correct FROM exercise_history
+        WHERE user_id = $1
+        ORDER BY created_at DESC
+        LIMIT $2
       `, [userId, STREAK_BONUS_INTERVAL]);
-      const currentStreak = parseInt(streakResult.rows[0].streak);
-      if (currentStreak > 0 && currentStreak % STREAK_BONUS_INTERVAL === 0) {
+      const allCorrect = streakResult.rows.length === STREAK_BONUS_INTERVAL &&
+                          streakResult.rows.every(r => r.correct);
+      if (allCorrect) {
         bonusPoints = STREAK_BONUS_POINTS;
         await client.query(`
           INSERT INTO point_events (user_id, points, reason, exercise_history_id)
@@ -71,19 +70,15 @@ export async function recordExercise({ userId, wordId, exerciseType, correct, se
     }
 
     // Update legacy progress table
-    const newStatus = correct ? 'learning' : 'new';
+    const status = correct ? 'mastered' : 'learning';
     await client.query(`
       INSERT INTO progress (user_id, word_id, status, times_practiced, last_practiced)
       VALUES ($1, $2, $3, 1, NOW())
       ON CONFLICT (user_id, word_id) DO UPDATE SET
-        status = CASE
-          WHEN progress.times_practiced + 1 >= 5 AND $4 = true THEN 'mastered'
-          WHEN $4 = true THEN 'learning'
-          ELSE progress.status
-        END,
+        status = CASE WHEN $3 = 'mastered' THEN 'mastered' ELSE progress.status END,
         times_practiced = progress.times_practiced + 1,
         last_practiced = NOW()
-    `, [userId, wordId, newStatus, correct]);
+    `, [userId, wordId, status]);
 
     await client.query('COMMIT');
 
@@ -112,7 +107,7 @@ export async function recordExercise({ userId, wordId, exerciseType, correct, se
 }
 
 /**
- * Record a bonus point event (e.g. daily login bonus).
+ * Record a bonus point event (e.g. perfect round, daily target met).
  */
 export async function recordBonus({ userId, points, reason }) {
   await pool.query(
@@ -136,71 +131,63 @@ export async function checkAchievements(userId) {
   );
   const unlockedIds = new Set(unlockedResult.rows.map(r => r.achievement_id));
 
-  // Gather stats
-  const [totalPointsRes, streakDays, exerciseCountRes, masteredRes, correctStreakRes] = await Promise.all([
+  // Gather stats in parallel
+  const [totalPointsRes, streakDays, masteredRes, totalWordsRes, matchGamesRes, correctSentencesRes, perfectRoundsRes] = await Promise.all([
     pool.query('SELECT COALESCE(SUM(points), 0)::int as total FROM point_events WHERE user_id = $1', [userId]),
     getStreakDays(userId),
-    pool.query('SELECT COUNT(*)::int as count FROM exercise_history WHERE user_id = $1', [userId]),
     pool.query("SELECT COUNT(*)::int as count FROM progress WHERE user_id = $1 AND status = 'mastered'", [userId]),
+    pool.query("SELECT COUNT(*)::int as count FROM words WHERE approved = true"),
+    pool.query("SELECT COUNT(DISTINCT session_id)::int as count FROM exercise_history WHERE user_id = $1 AND exercise_type = 'matching'", [userId]),
+    pool.query("SELECT COUNT(*)::int as count FROM exercise_history WHERE user_id = $1 AND exercise_type = 'sentence' AND correct = true", [userId]),
     pool.query(`
-      SELECT COUNT(*) as streak FROM (
-        SELECT correct FROM exercise_history
-        WHERE user_id = $1 ORDER BY created_at DESC
-        LIMIT 500
-      ) t WHERE correct = true
-      AND NOT EXISTS (
-        SELECT 1 FROM (
-          SELECT correct, ROW_NUMBER() OVER (ORDER BY created_at DESC) as rn
-          FROM exercise_history WHERE user_id = $1
-        ) t2 WHERE t2.correct = false AND t2.rn <= (
-          SELECT MIN(rn) FROM (
-            SELECT correct, ROW_NUMBER() OVER (ORDER BY created_at DESC) as rn
-            FROM exercise_history WHERE user_id = $1
-          ) t3 WHERE t3.correct = false
-        )
-      )
-    `, [userId]).catch(() => ({ rows: [{ streak: 0 }] })),
+      SELECT COUNT(*)::int as count FROM (
+        SELECT session_id FROM exercise_history
+        WHERE user_id = $1 AND exercise_type = 'matching'
+        GROUP BY session_id
+        HAVING COUNT(*) = SUM(CASE WHEN correct THEN 1 ELSE 0 END) AND COUNT(*) >= 8
+      ) sub
+    `, [userId]),
   ]);
 
   const totalPoints = totalPointsRes.rows[0].total;
-  const exerciseCount = exerciseCountRes.rows[0].count;
   const masteredCount = masteredRes.rows[0].count;
+  const totalWords = totalWordsRes.rows[0].count;
+  const matchGames = matchGamesRes.rows[0].count;
+  const correctSentences = correctSentencesRes.rows[0].count;
+  const perfectRounds = perfectRoundsRes.rows[0].count;
 
-  // Calculate current correct-answer streak
-  const correctStreakQuery = await pool.query(`
-    SELECT correct FROM exercise_history
-    WHERE user_id = $1
-    ORDER BY created_at DESC LIMIT 500
-  `, [userId]);
-  let correctStreak = 0;
-  for (const row of correctStreakQuery.rows) {
-    if (row.correct) correctStreak++;
-    else break;
-  }
+  // Check each achievement
+  const checks = {
+    // Points
+    first_point: totalPoints >= 1,
+    ten_points: totalPoints >= 10,
+    fifty_points: totalPoints >= 50,
+    hundred_points: totalPoints >= 100,
+    five_hundred_points: totalPoints >= 500,
+    thousand_points: totalPoints >= 1000,
+    two_thousand_points: totalPoints >= 2000,
+    // Streaks
+    streak_3: streakDays >= 3,
+    streak_7: streakDays >= 7,
+    streak_14: streakDays >= 14,
+    streak_30: streakDays >= 30,
+    // Mastery
+    mastery_10: masteredCount >= 10,
+    mastery_25: masteredCount >= 25,
+    mastery_50: masteredCount >= 50,
+    mastery_all: totalWords > 0 && masteredCount >= totalWords,
+    // Games
+    first_match: matchGames >= 1,
+    first_sentence: correctSentences >= 1,
+    perfect_round: perfectRounds >= 1,
+    ten_perfect_rounds: perfectRounds >= 10,
+    hundred_sentences: correctSentences >= 100,
+  };
 
   for (const achievement of allResult.rows) {
     if (unlockedIds.has(achievement.id)) continue;
 
-    let earned = false;
-    switch (achievement.category) {
-      case 'points':
-        earned = totalPoints >= achievement.threshold;
-        break;
-      case 'streak':
-        earned = streakDays >= achievement.threshold;
-        break;
-      case 'mastery':
-        earned = masteredCount >= achievement.threshold;
-        break;
-      case 'games':
-        if (achievement.key === 'games_perfect_10') {
-          earned = correctStreak >= achievement.threshold;
-        } else {
-          earned = exerciseCount >= achievement.threshold;
-        }
-        break;
-    }
-
+    const earned = checks[achievement.key];
     if (earned) {
       try {
         await pool.query(
@@ -249,14 +236,10 @@ export async function getStreakDays(userId) {
     if (dayDate.getTime() === checkDate.getTime()) {
       streak++;
       checkDate.setDate(checkDate.getDate() - 1);
-    } else if (dayDate.getTime() === checkDate.getTime() - 86400000) {
-      // Allow the first row to be yesterday (haven't played today yet)
-      if (streak === 0) {
-        streak++;
-        checkDate.setDate(checkDate.getDate() - 2);
-      } else {
-        break;
-      }
+    } else if (streak === 0 && dayDate.getTime() === checkDate.getTime() - 86400000) {
+      // First row is yesterday (haven't played today yet) — count from yesterday
+      streak++;
+      checkDate.setDate(checkDate.getDate() - 2);
     } else {
       break;
     }
@@ -267,16 +250,16 @@ export async function getStreakDays(userId) {
 
 /**
  * Calculate daily target from scheduled words (default 110 points).
+ * Formula: 7 words x 10pts (matching) + 2 sentences x 20pts = 110
  */
 export async function getDailyTarget(userId) {
   const result = await pool.query(`
     SELECT COUNT(*)::int as count
     FROM learning_schedule
-    WHERE user_id = $1 AND scheduled_date = CURRENT_DATE AND completed = false
+    WHERE user_id = $1 AND scheduled_date = CURRENT_DATE
   `, [userId]);
-  const scheduledWords = result.rows[0].count;
-  // Each word is worth ~15 points average, minimum target 110
-  return Math.max(110, scheduledWords * 15);
+  const scheduledWords = Math.max(parseInt(result.rows[0].count), 7);
+  return scheduledWords * 10 + 2 * 20;
 }
 
 /**
@@ -308,18 +291,5 @@ export function getTreeStage(totalPoints) {
       break;
     }
   }
-
-  // Calculate progress to next stage
-  const nextStage = TREE_STAGES.find(s => s.minPoints > totalPoints);
-  const progressToNext = nextStage
-    ? (totalPoints - current.minPoints) / (nextStage.minPoints - current.minPoints)
-    : 1;
-
-  return {
-    stage: current.stage,
-    name: current.name,
-    progressToNext: Math.min(1, Math.max(0, progressToNext)),
-    nextStageName: nextStage?.name || null,
-    nextStagePoints: nextStage?.minPoints || null,
-  };
+  return { stage: current.stage, name: current.name };
 }
