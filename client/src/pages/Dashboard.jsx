@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
+import { useGamification } from '../GamificationContext.jsx';
 
 function formatDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -8,11 +9,21 @@ function formatDate(d) {
 
 function Dashboard({ onNavigate }) {
   const { user } = useAuth();
+  const { treeData } = useGamification() || {};
+  const [achievements, setAchievements] = useState([]);
   const [stats, setStats] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [todayWords, setTodayWords] = useState([]);
   const [scheduleLoading, setScheduleLoading] = useState(true);
+
+  useEffect(() => {
+    if (user) {
+      apiFetch('/achievements')
+        .then(data => setAchievements(data.achievements || []))
+        .catch(() => {});
+    }
+  }, [user]);
 
   useEffect(() => {
     if (!user) {
@@ -103,6 +114,27 @@ function Dashboard({ onNavigate }) {
           {getEncouragingMessage()}
         </p>
       </div>
+
+      {/* Points Summary */}
+      {treeData && (
+        <div className="card" style={{ marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+          <div style={{ flex: 1, minWidth: 120 }}>
+            <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--green-dark)' }}>
+              ⚡ {treeData.totalPoints} pts
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>
+              Today: {treeData.todayEarned} / {treeData.dailyTarget} pts
+            </div>
+          </div>
+          <div style={{ height: 6, flex: 2, minWidth: 120, background: 'var(--cream-dark)', borderRadius: 3 }}>
+            <div style={{
+              height: '100%', borderRadius: 3, transition: 'width 0.3s',
+              width: `${Math.min(100, (treeData.todayEarned / treeData.dailyTarget) * 100)}%`,
+              background: treeData.todayEarned >= treeData.dailyTarget ? 'var(--green)' : 'var(--orange, #f39c12)',
+            }} />
+          </div>
+        </div>
+      )}
 
       {/* Today's Words */}
       {!scheduleLoading && todayWords.length > 0 && (
@@ -245,6 +277,29 @@ function Dashboard({ onNavigate }) {
           {masteredPercent}% of words mastered — {mastered} out of {total}
         </p>
       </div>
+
+      {/* Achievement Badges */}
+      {achievements.length > 0 && (
+        <div className="card" style={{ marginTop: '1.5rem' }}>
+          <h3 style={{ marginBottom: '1rem' }}>🏆 Achievements</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(90px, 1fr))', gap: '10px' }}>
+            {achievements.map(a => (
+              <div key={a.id} style={{
+                textAlign: 'center', padding: '10px 6px', borderRadius: 10,
+                background: a.unlocked_at ? 'var(--cream, #f5f0e8)' : '#f0f0f0',
+                opacity: a.unlocked_at ? 1 : 0.4,
+                border: a.unlocked_at ? '2px solid var(--green, #6b9e7a)' : '2px solid #ddd',
+                transition: 'all 0.2s',
+              }}>
+                <div style={{ fontSize: 28 }}>{a.unlocked_at ? a.emoji : '❓'}</div>
+                <div style={{ fontSize: 11, fontWeight: 700, marginTop: 4, lineHeight: 1.2 }}>
+                  {a.unlocked_at ? a.title : '???'}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="card" style={{ marginTop: '1.5rem' }}>
         <h3 style={{ marginBottom: '1rem' }}>What would you like to do?</h3>

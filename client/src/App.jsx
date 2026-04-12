@@ -1,6 +1,9 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useAuth } from './AuthContext.jsx';
 import { WordsProvider } from './WordsContext.jsx';
+import { useGamification } from './GamificationContext.jsx';
+import CelebrationOverlay from './CelebrationOverlay.jsx';
+import GrowthTree from './GrowthTree.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import WordList from './pages/WordList.jsx';
 import WordDetail from './pages/WordDetail.jsx';
@@ -9,10 +12,14 @@ import AdminPanel from './pages/AdminPanel.jsx';
 import Settings from './pages/Settings.jsx';
 import Calendar from './pages/Calendar.jsx';
 import Profile from './pages/Profile.jsx';
+import Leaderboard from './pages/Leaderboard.jsx';
+import MatchingGame from './pages/MatchingGame.jsx';
+import SentenceBuilder from './pages/SentenceBuilder.jsx';
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
   { id: 'calendar', label: 'Calendar', icon: '📅' },
+  { id: 'leaderboard', label: 'Leaderboard', icon: '🏆' },
   { id: 'words', label: 'Word List', icon: '📚' },
   { id: 'clusters', label: 'Word Clusters', icon: '🕸️' },
   { id: 'profile', label: 'My Profile', icon: '👤' },
@@ -21,11 +28,74 @@ const NAV_ITEMS = [
 
 const ADMIN_NAV = { id: 'admin', label: 'Admin Panel', icon: '⚙️' };
 
+const isProduction = typeof window !== 'undefined' && !['localhost', '127.0.0.1'].includes(window.location.hostname);
+
+function GoogleLoginButton({ clientId, onError }) {
+  const { loginWithGoogle } = useAuth();
+  const divRef = React.useRef(null);
+  const [scriptLoaded, setScriptLoaded] = useState(false);
+
+  useEffect(() => {
+    if (document.getElementById('google-gsi-script')) {
+      setScriptLoaded(true);
+      return;
+    }
+    const script = document.createElement('script');
+    script.id = 'google-gsi-script';
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => setScriptLoaded(true);
+    script.onerror = () => onError('Failed to load Google Sign-In');
+    document.head.appendChild(script);
+  }, []);
+
+  useEffect(() => {
+    if (!scriptLoaded || !window.google || !divRef.current || !clientId) return;
+    try {
+      window.google.accounts.id.initialize({
+        client_id: clientId,
+        callback: async (response) => {
+          try {
+            await loginWithGoogle(response.credential);
+          } catch (err) {
+            onError(err.message);
+          }
+        },
+      });
+      window.google.accounts.id.renderButton(divRef.current, {
+        theme: 'outline',
+        size: 'large',
+        width: 350,
+        text: 'signin_with',
+        shape: 'rectangular',
+      });
+    } catch (err) {
+      onError('Failed to initialize Google Sign-In');
+    }
+  }, [scriptLoaded, clientId, loginWithGoogle, onError]);
+
+  return <div ref={divRef} style={{ display: 'flex', justifyContent: 'center' }} />;
+}
+
 function LoginScreen() {
   const { loginWithName } = useAuth();
   const [name, setName] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
+  const [googleClientId, setGoogleClientId] = useState(null);
+  const [configLoaded, setConfigLoaded] = useState(!isProduction);
+
+  useEffect(() => {
+    if (!isProduction) return;
+    fetch('/api/auth/config')
+      .then(r => r.json())
+      .then(data => {
+        if (data.googleClientId) setGoogleClientId(data.googleClientId);
+      })
+      .catch(() => {})
+      .finally(() => setConfigLoaded(true));
+  }, []);
 
   const handleLogin = async (e) => {
     e.preventDefault();
@@ -40,6 +110,8 @@ function LoginScreen() {
       setSending(false);
     }
   };
+
+  const showGoogle = isProduction && googleClientId;
 
   return (
     <div className="login-screen">
@@ -64,21 +136,33 @@ function LoginScreen() {
       </div>
 
       <div className="card" style={{ maxWidth: 400, width: '100%', marginTop: 8 }}>
-        <form onSubmit={handleLogin}>
-          <h3 style={{ marginBottom: 12, textAlign: 'center' }}>What's your name?</h3>
-          <input
-            type="text"
-            placeholder="Enter your first name"
-            value={name}
-            onChange={e => setName(e.target.value)}
-            required
-            style={{ marginBottom: 12 }}
-            autoFocus
-          />
-          <button className="btn-primary" type="submit" disabled={sending} style={{ width: '100%' }}>
-            {sending ? 'Signing in...' : 'Start Learning'}
-          </button>
-        </form>
+        {!configLoaded ? (
+          <div style={{ textAlign: 'center', padding: 20 }}>
+            <div className="spinner" style={{ margin: '0 auto 8px' }}></div>
+            <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Loading...</p>
+          </div>
+        ) : showGoogle ? (
+          <>
+            <h3 style={{ marginBottom: 16, textAlign: 'center' }}>Sign in to start learning</h3>
+            <GoogleLoginButton clientId={googleClientId} onError={setError} />
+          </>
+        ) : (
+          <form onSubmit={handleLogin}>
+            <h3 style={{ marginBottom: 12, textAlign: 'center' }}>What's your name?</h3>
+            <input
+              type="text"
+              placeholder="Enter your first name"
+              value={name}
+              onChange={e => setName(e.target.value)}
+              required
+              style={{ marginBottom: 12 }}
+              autoFocus
+            />
+            <button className="btn-primary" type="submit" disabled={sending} style={{ width: '100%' }}>
+              {sending ? 'Signing in...' : 'Start Learning'}
+            </button>
+          </form>
+        )}
         {error && <p style={{ color: 'var(--red)', marginTop: 8, textAlign: 'center', fontSize: 13 }}>{error}</p>}
       </div>
     </div>
@@ -87,6 +171,7 @@ function LoginScreen() {
 
 export default function App() {
   const { user, loading, logout } = useAuth();
+  const { treeData, streak } = useGamification() || {};
   const [tab, setTab] = useState('dashboard');
   const [tabParam, setTabParam] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -118,6 +203,9 @@ export default function App() {
       case 'words': return <WordList onNavigate={handleNavigate} initialSearch={tabParam || ''} />;
       case 'word': return <WordDetail wordId={tabParam} onNavigate={handleNavigate} />;
       case 'calendar': return <Calendar onNavigate={handleNavigate} />;
+      case 'leaderboard': return <Leaderboard />;
+      case 'matching': return <MatchingGame />;
+      case 'sentence': return <SentenceBuilder />;
       case 'clusters': return <WordClusters />;
       case 'profile': return <Profile />;
       case 'settings': return <Settings />;
@@ -165,6 +253,21 @@ export default function App() {
           ))}
         </div>
 
+        {/* Gamification widgets */}
+        {user && treeData && (
+          <div style={{ padding: '12px 16px', borderTop: '1px solid var(--cream-dark, #e0d5c1)' }}>
+            {streak && (
+              <div style={{ textAlign: 'center', marginBottom: 8, fontSize: 14, fontWeight: 700, color: 'var(--orange, #f39c12)' }}>
+                🔥 {streak.days} day streak{!streak.todayActive && streak.days > 0 ? ' — keep it going!' : ''}
+              </div>
+            )}
+            <GrowthTree stage={treeData.stage} healthPercent={treeData.healthPercent} />
+            <div style={{ textAlign: 'center', marginTop: 8, fontSize: 13, fontWeight: 600, color: 'var(--text-muted)' }}>
+              ⚡ {treeData.todayEarned} / {treeData.dailyTarget} pts today
+            </div>
+          </div>
+        )}
+
         <div className="sidebar-footer">
           <div className="user-info">
             <img
@@ -188,6 +291,7 @@ export default function App() {
         {renderPage()}
       </main>
     </div>
+    <CelebrationOverlay />
     </WordsProvider>
   );
 }

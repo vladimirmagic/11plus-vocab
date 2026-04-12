@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
+import { useGamification } from '../GamificationContext.jsx';
 
 function shuffleArray(arr) {
   const shuffled = [...arr];
@@ -13,6 +14,8 @@ function shuffleArray(arr) {
 
 export default function MatchingGame() {
   const { user } = useAuth();
+  const { recordExercise, recordBonus, newSessionId } = useGamification() || {};
+  const [pointsFloat, setPointsFloat] = useState(null);
   const [words, setWords] = useState([]);
   const [shuffledDefs, setShuffledDefs] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -36,6 +39,7 @@ export default function MatchingGame() {
   }, []);
 
   const startGame = useCallback(async () => {
+    if (newSessionId) newSessionId();
     setLoading(true);
     setGameComplete(false);
     setMatchedIds(new Set());
@@ -55,7 +59,7 @@ export default function MatchingGame() {
     } finally {
       setLoading(false);
     }
-  }, [category]);
+  }, [category, newSessionId]);
 
   useEffect(() => {
     if (gameActive && !gameComplete) {
@@ -85,32 +89,40 @@ export default function MatchingGame() {
       setStreak(prev => prev + 1);
       setSelectedWord(null);
 
-      try {
-        await apiFetch(`/progress/${defWord.id}`, {
-          method: 'PUT',
-          body: { status: 'mastered' },
+      if (recordExercise) {
+        await recordExercise({
+          wordId: defWord.id,
+          exerciseType: 'matching',
+          correct: true,
+          metadata: { timeElapsed: timer },
         });
-      } catch (err) {
-        console.error('Failed to update progress:', err);
       }
+      setPointsFloat({ id: Date.now(), points: '+10', positive: true });
+      setTimeout(() => setPointsFloat(null), 1000);
 
       if (newMatched.size === words.length) {
         setGameComplete(true);
         setGameActive(false);
         if (timerRef.current) clearInterval(timerRef.current);
+        // Perfect round bonus if all correct (score was never reset, so score+1 === words.length means no wrong answers)
+        if (score + 1 === words.length && recordBonus) {
+          recordBonus({ points: 25, reason: 'perfect_round' });
+        }
       }
     } else {
       setStreak(0);
       setWrongPair({ wordId: selectedWord.id, defId: defWord.id });
 
-      try {
-        await apiFetch(`/progress/${selectedWord.id}`, {
-          method: 'PUT',
-          body: { status: 'learning' },
+      if (recordExercise) {
+        await recordExercise({
+          wordId: selectedWord.id,
+          exerciseType: 'matching',
+          correct: false,
+          metadata: {},
         });
-      } catch (err) {
-        console.error('Failed to update progress:', err);
       }
+      setPointsFloat({ id: Date.now(), points: '-3', positive: false });
+      setTimeout(() => setPointsFloat(null), 1000);
 
       setTimeout(() => {
         setWrongPair(null);
@@ -169,7 +181,7 @@ export default function MatchingGame() {
 
   return (
     <div className="matching-game">
-      <div className="game-header">
+      <div className="game-header" style={{ position: 'relative' }}>
         <div className="game-score">
           <div className="score-item">
             <span className="score-value">{score}/{words.length}</span>
@@ -188,6 +200,12 @@ export default function MatchingGame() {
             <span className="score-label">Round</span>
           </div>
         </div>
+        {pointsFloat && (
+          <span key={pointsFloat.id} className={`points-float ${pointsFloat.positive ? 'positive' : 'negative'}`}
+            style={{ position: 'absolute', right: 16, top: 8 }}>
+            {pointsFloat.points}
+          </span>
+        )}
       </div>
 
       {gameComplete ? (
