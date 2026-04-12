@@ -8,6 +8,8 @@ import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import pool from './db.js';
 import { initDatabase } from './init-db.js';
 import { generateJwt, authMiddleware, adminMiddleware } from './auth.js';
+import { seedAchievements } from './seed-achievements.js';
+import { recordExercise, recordBonus, checkAchievements, getStreakDays, getDailyTarget, getTodayPoints, getTreeStage } from './gamification.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: join(__dirname, '.env'), override: true });
@@ -65,7 +67,68 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// ── Auth (Name only) ──
+// ── Auth config (public) ──
+app.get('/api/auth/config', (req, res) => {
+  res.json({
+    googleClientId: process.env.GOOGLE_OAUTH_CLIENT_ID || null,
+  });
+});
+
+// ── Auth (Google OAuth) ──
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { credential } = req.body;
+    if (!credential) return res.status(400).json({ error: 'No credential provided' });
+
+    // Verify the Google ID token
+    const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${credential}`);
+    if (!verifyRes.ok) return res.status(401).json({ error: 'Invalid Google token' });
+
+    const payload = await verifyRes.json();
+    const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+    if (clientId && payload.aud !== clientId) {
+      return res.status(401).json({ error: 'Token audience mismatch' });
+    }
+
+    const { email, name, picture } = payload;
+    if (!email) return res.status(400).json({ error: 'No email in Google token' });
+
+    // Create or update user by email
+    // First check if user with this email exists
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    let result;
+    if (existing.rows.length > 0) {
+      result = await pool.query(`
+        UPDATE users SET
+          name = COALESCE(NULLIF($2, ''), name),
+          avatar_url = COALESCE($3, avatar_url)
+        WHERE email = $1
+        RETURNING id, name, email, avatar_url, role, voice_preference
+      `, [email, name, picture || null]);
+    } else {
+      // New user — ensure name doesn't conflict with existing name-only users
+      let displayName = name || email.split('@')[0];
+      const nameCheck = await pool.query('SELECT id FROM users WHERE name = $1', [displayName]);
+      if (nameCheck.rows.length > 0) {
+        displayName = `${displayName} (${email.split('@')[0]})`;
+      }
+      result = await pool.query(`
+        INSERT INTO users (name, email, avatar_url)
+        VALUES ($1, $2, $3)
+        RETURNING id, name, email, avatar_url, role, voice_preference
+      `, [displayName, email, picture || null]);
+    }
+
+    const user = result.rows[0];
+    const token = generateJwt(user);
+    res.json({ token, user });
+  } catch (err) {
+    console.error('Google auth error:', err);
+    res.status(500).json({ error: 'Google authentication failed' });
+  }
+});
+
+// ── Auth (Name only — local dev) ──
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { name } = req.body;
@@ -1078,6 +1141,249 @@ app.get('/api/schedule/unscheduled', authMiddleware, async (req, res) => {
   }
 });
 
+// ── Gamification: Tier helper ──
+function getTier(totalPoints) {
+  if (totalPoints >= 20000) return { name: 'Diamond', emoji: '💎', color: '#b9f2ff' };
+  if (totalPoints >= 8000)  return { name: 'Gold',    emoji: '🥇', color: '#ffd700' };
+  if (totalPoints >= 3000)  return { name: 'Silver',  emoji: '🥈', color: '#c0c0c0' };
+  return { name: 'Bronze', emoji: '🥉', color: '#cd7f32' };
+}
+
+// ── Gamification Endpoints ──
+
+// 1. POST /api/exercises — record exercise answer
+app.post('/api/exercises', authMiddleware, async (req, res) => {
+  try {
+    const { wordId, exerciseType, correct, sessionId, metadata } = req.body;
+    if (!wordId || !exerciseType || correct === undefined || !sessionId) {
+      return res.status(400).json({ error: 'wordId, exerciseType, correct, and sessionId are required' });
+    }
+    const result = await recordExercise({
+      userId: req.user.userId,
+      wordId,
+      exerciseType,
+      correct: !!correct,
+      sessionId,
+      metadata: metadata || {},
+    });
+    res.json(result);
+  } catch (err) {
+    console.error('Record exercise error:', err);
+    res.status(500).json({ error: 'Failed to record exercise' });
+  }
+});
+
+// 2. POST /api/exercises/bonus — record bonus points
+app.post('/api/exercises/bonus', authMiddleware, async (req, res) => {
+  try {
+    const { points, reason } = req.body;
+    if (!points || !reason) return res.status(400).json({ error: 'points and reason required' });
+    await recordBonus({ userId: req.user.userId, points, reason });
+    res.json({ success: true, points, reason });
+  } catch (err) {
+    console.error('Record bonus error:', err);
+    res.status(500).json({ error: 'Failed to record bonus' });
+  }
+});
+
+// 3. GET /api/exercises/history — paginated history
+app.get('/api/exercises/history', authMiddleware, async (req, res) => {
+  try {
+    const { limit = 50, offset = 0 } = req.query;
+    const result = await pool.query(`
+      SELECT eh.*, w.word, w.visual_emoji
+      FROM exercise_history eh
+      JOIN words w ON w.id = eh.word_id
+      WHERE eh.user_id = $1
+      ORDER BY eh.created_at DESC
+      LIMIT $2 OFFSET $3
+    `, [req.user.userId, parseInt(limit), parseInt(offset)]);
+    const countResult = await pool.query(
+      'SELECT COUNT(*)::int as total FROM exercise_history WHERE user_id = $1',
+      [req.user.userId]
+    );
+    res.json({ history: result.rows, total: countResult.rows[0].total });
+  } catch (err) {
+    console.error('Exercise history error:', err);
+    res.status(500).json({ error: 'Failed to fetch exercise history' });
+  }
+});
+
+// 4. GET /api/exercises/sessions — session summaries
+app.get('/api/exercises/sessions', authMiddleware, async (req, res) => {
+  try {
+    const { limit = 20, offset = 0 } = req.query;
+    const result = await pool.query(`
+      SELECT
+        session_id,
+        MIN(created_at) as started_at,
+        MAX(created_at) as ended_at,
+        COUNT(*)::int as total_exercises,
+        COUNT(*) FILTER (WHERE correct)::int as correct_count,
+        SUM(points_earned)::int as total_points,
+        array_agg(DISTINCT exercise_type) as exercise_types
+      FROM exercise_history
+      WHERE user_id = $1
+      GROUP BY session_id
+      ORDER BY MIN(created_at) DESC
+      LIMIT $2 OFFSET $3
+    `, [req.user.userId, parseInt(limit), parseInt(offset)]);
+    res.json({ sessions: result.rows });
+  } catch (err) {
+    console.error('Sessions error:', err);
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+// 5. GET /api/points/today — today's earned/lost/target
+app.get('/api/points/today', authMiddleware, async (req, res) => {
+  try {
+    const todayPts = await getTodayPoints(req.user.userId);
+    const target = await getDailyTarget(req.user.userId);
+    res.json({ ...todayPts, target, net: todayPts.earned - todayPts.lost });
+  } catch (err) {
+    console.error('Today points error:', err);
+    res.status(500).json({ error: 'Failed to fetch today points' });
+  }
+});
+
+// 6. GET /api/points/total — all-time total
+app.get('/api/points/total', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT COALESCE(SUM(points), 0)::int as total FROM point_events WHERE user_id = $1',
+      [req.user.userId]
+    );
+    const total = result.rows[0].total;
+    const tier = getTier(total);
+    res.json({ total, tier });
+  } catch (err) {
+    console.error('Total points error:', err);
+    res.status(500).json({ error: 'Failed to fetch total points' });
+  }
+});
+
+// 7. GET /api/streak — streak days + freezes + todayActive
+app.get('/api/streak', authMiddleware, async (req, res) => {
+  try {
+    const streakDays = await getStreakDays(req.user.userId);
+    const freezeResult = await pool.query(
+      'SELECT streak_freezes FROM users WHERE id = $1',
+      [req.user.userId]
+    );
+    const freezes = freezeResult.rows[0]?.streak_freezes || 0;
+    // Check if user has positive points today
+    const todayResult = await pool.query(`
+      SELECT EXISTS(
+        SELECT 1 FROM point_events
+        WHERE user_id = $1 AND points > 0 AND created_at >= CURRENT_DATE
+      ) as active
+    `, [req.user.userId]);
+    const todayActive = todayResult.rows[0].active;
+    res.json({ streakDays, freezes, todayActive });
+  } catch (err) {
+    console.error('Streak error:', err);
+    res.status(500).json({ error: 'Failed to fetch streak' });
+  }
+});
+
+// 8. GET /api/achievements — all achievements with unlock status
+app.get('/api/achievements', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT a.*, ua.unlocked_at
+      FROM achievements a
+      LEFT JOIN user_achievements ua ON ua.achievement_id = a.id AND ua.user_id = $1
+      ORDER BY a.category, a.threshold
+    `, [req.user.userId]);
+    res.json({
+      achievements: result.rows.map(a => ({
+        id: a.id,
+        key: a.key,
+        title: a.title,
+        description: a.description,
+        emoji: a.emoji,
+        threshold: a.threshold,
+        category: a.category,
+        unlocked: !!a.unlocked_at,
+        unlockedAt: a.unlocked_at || null,
+      })),
+    });
+  } catch (err) {
+    console.error('Achievements error:', err);
+    res.status(500).json({ error: 'Failed to fetch achievements' });
+  }
+});
+
+// 9. GET /api/tree — tree state
+app.get('/api/tree', authMiddleware, async (req, res) => {
+  try {
+    const totalResult = await pool.query(
+      'SELECT COALESCE(SUM(points), 0)::int as total FROM point_events WHERE user_id = $1',
+      [req.user.userId]
+    );
+    const totalPoints = totalResult.rows[0].total;
+    const tree = getTreeStage(totalPoints);
+    const todayPts = await getTodayPoints(req.user.userId);
+    const target = await getDailyTarget(req.user.userId);
+    const healthPercent = target > 0 ? Math.min(100, Math.round((todayPts.earned / target) * 100)) : 100;
+    res.json({
+      totalPoints,
+      ...tree,
+      healthPercent,
+      todayEarned: todayPts.earned,
+      todayTarget: target,
+    });
+  } catch (err) {
+    console.error('Tree error:', err);
+    res.status(500).json({ error: 'Failed to fetch tree state' });
+  }
+});
+
+// 10. GET /api/leaderboard — weekly/monthly rankings with tier badges
+app.get('/api/leaderboard', authMiddleware, async (req, res) => {
+  try {
+    const { period = 'weekly' } = req.query;
+    const dateFilter = period === 'monthly'
+      ? "created_at >= date_trunc('month', CURRENT_DATE)"
+      : "created_at >= date_trunc('week', CURRENT_DATE)";
+
+    const result = await pool.query(`
+      SELECT
+        u.id as user_id,
+        u.name,
+        u.avatar_url,
+        COALESCE(SUM(pe.points), 0)::int as period_points,
+        all_time.total as all_time_points
+      FROM users u
+      LEFT JOIN point_events pe ON pe.user_id = u.id AND pe.${dateFilter}
+      LEFT JOIN (
+        SELECT user_id, COALESCE(SUM(points), 0)::int as total
+        FROM point_events GROUP BY user_id
+      ) all_time ON all_time.user_id = u.id
+      GROUP BY u.id, u.name, u.avatar_url, all_time.total
+      HAVING COALESCE(SUM(pe.points), 0) > 0
+      ORDER BY period_points DESC
+      LIMIT 50
+    `);
+
+    const leaderboard = result.rows.map((row, idx) => ({
+      rank: idx + 1,
+      userId: row.user_id,
+      name: row.name,
+      avatarUrl: row.avatar_url,
+      periodPoints: row.period_points,
+      allTimePoints: row.all_time_points || 0,
+      tier: getTier(row.all_time_points || 0),
+    }));
+
+    res.json({ period, leaderboard });
+  } catch (err) {
+    console.error('Leaderboard error:', err);
+    res.status(500).json({ error: 'Failed to fetch leaderboard' });
+  }
+});
+
 // SPA fallback
 app.get('*', (req, res) => {
   if (existsSync(clientDist)) {
@@ -1089,6 +1395,7 @@ app.get('*', (req, res) => {
 
 async function start() {
   await initDatabase();
+  await seedAchievements();
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
     console.log(`11plus-vocab server running on http://localhost:${PORT}`);
