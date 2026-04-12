@@ -121,7 +121,7 @@ export default function SentenceBuilder() {
           metadata: { sentence: sentence.trim(), feedback: data.feedback },
         });
         if (result) {
-          const pts = data.correct ? '+20' : '-5';
+          const pts = data.correct ? '+20 Great sentence!' : '-5 Keep trying!';
           setPointsFloat({ id: Date.now(), points: pts, positive: data.correct });
           setTimeout(() => setPointsFloat(null), 1000);
         }

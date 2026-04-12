@@ -97,7 +97,7 @@ export default function MatchingGame() {
           metadata: { timeElapsed: timer },
         });
       }
-      setPointsFloat({ id: Date.now(), points: '+10', positive: true });
+      setPointsFloat({ id: Date.now(), points: '+10 Correct!', positive: true });
       setTimeout(() => setPointsFloat(null), 1000);
 
       if (newMatched.size === words.length) {
@@ -107,6 +107,10 @@ export default function MatchingGame() {
         // Perfect round bonus if all correct (score was never reset, so score+1 === words.length means no wrong answers)
         if (score + 1 === words.length && recordBonus) {
           recordBonus({ points: 25, reason: 'perfect_round' });
+          setTimeout(() => {
+            setPointsFloat({ id: Date.now(), points: '+25 Perfect round!', positive: true });
+            setTimeout(() => setPointsFloat(null), 1000);
+          }, 1100);
         }
       }
     } else {
@@ -121,7 +125,7 @@ export default function MatchingGame() {
           metadata: {},
         });
       }
-      setPointsFloat({ id: Date.now(), points: '-3', positive: false });
+      setPointsFloat({ id: Date.now(), points: '-3 Try again!', positive: false });
       setTimeout(() => setPointsFloat(null), 1000);
 
       setTimeout(() => {
