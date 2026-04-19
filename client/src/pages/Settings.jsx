@@ -1,6 +1,80 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
+import Calendar from './Calendar.jsx';
+
+const PROMPT_LABELS = {
+  freewrite_evaluate: 'Free Write — Sentence Evaluation',
+  validate_sentence: 'Text/Picture Prompt — Sentence Validation',
+  text_prompt: 'Text Prompt — Scenario Generation',
+  generate_word: 'Word Generation — New Word Content',
+};
+
+function PromptsEditor() {
+  const [prompts, setPrompts] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [editKey, setEditKey] = useState(null);
+
+  useEffect(() => {
+    apiFetch('/prompts').then(setPrompts).catch(() => {});
+  }, []);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      await apiFetch('/prompts', { method: 'PUT', body: prompts });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch {}
+    setSaving(false);
+  }
+
+  async function handleReset() {
+    if (!confirm('Reset all prompts to defaults?')) return;
+    try {
+      const data = await apiFetch('/prompts/reset', { method: 'POST' });
+      setPrompts(data);
+    } catch {}
+  }
+
+  if (!prompts) return <div className="loading"><div className="spinner"></div>Loading prompts...</div>;
+
+  return (
+    <div>
+      <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
+        Edit the AI prompts used throughout the app. Use <code style={{ background: 'var(--cream-dark)', padding: '1px 4px', borderRadius: 3 }}>{'{{word}}'}</code>, <code style={{ background: 'var(--cream-dark)', padding: '1px 4px', borderRadius: 3 }}>{'{{definition}}'}</code>, <code style={{ background: 'var(--cream-dark)', padding: '1px 4px', borderRadius: 3 }}>{'{{sentence}}'}</code> as placeholders.
+      </p>
+      {Object.entries(PROMPT_LABELS).map(([key, label]) => (
+        <div key={key} style={{ marginBottom: 16, border: '1px solid var(--cream-dark)', borderRadius: 10, overflow: 'hidden' }}>
+          <div
+            onClick={() => setEditKey(editKey === key ? null : key)}
+            style={{ padding: '10px 16px', background: 'var(--cream)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+          >
+            <strong style={{ fontSize: 14 }}>{label}</strong>
+            <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{editKey === key ? '▲ collapse' : '▼ expand'}</span>
+          </div>
+          {editKey === key && (
+            <div style={{ padding: 12 }}>
+              <textarea
+                value={prompts[key] || ''}
+                onChange={e => setPrompts({ ...prompts, [key]: e.target.value })}
+                rows={12}
+                style={{ width: '100%', fontFamily: 'monospace', fontSize: 12, padding: 10, border: '1px solid var(--cream-dark)', borderRadius: 6, resize: 'vertical', lineHeight: 1.5 }}
+              />
+            </div>
+          )}
+        </div>
+      ))}
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button className="btn-primary" onClick={handleSave} disabled={saving}>
+          {saving ? 'Saving...' : saved ? '✓ Saved!' : 'Save Prompts'}
+        </button>
+        <button className="btn-secondary" onClick={handleReset}>Reset to Defaults</button>
+      </div>
+    </div>
+  );
+}
 
 const PREVIEW_PHRASES = [
   "The curious cat explored the mysterious garden.",
@@ -11,7 +85,7 @@ const PREVIEW_PHRASES = [
 ];
 
 export default function Settings() {
-  const { user } = useAuth();
+  const { user, updateUser } = useAuth();
   const [voices, setVoices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedVoice, setSelectedVoice] = useState(user?.voice_preference || 'en-GB-Wavenet-B');
@@ -61,6 +135,8 @@ export default function Settings() {
     setSaved(false);
     try {
       await apiFetch('/auth/voice', { method: 'PUT', body: { voice: voiceName } });
+      // Update user context so all components get the new voice immediately
+      updateUser({ voice_preference: voiceName });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {
@@ -73,15 +149,32 @@ export default function Settings() {
 
   const genderIcon = (g) => g === 'MALE' ? '👨' : '👩';
 
+  const [settingsTab, setSettingsTab] = useState('voice');
+
   if (loading) {
-    return <div className="loading"><div className="spinner"></div>Loading voices...</div>;
+    return <div className="loading"><div className="spinner"></div>Loading settings...</div>;
   }
 
   return (
     <div>
       <div className="page-header">
-        <h2>Voice Settings</h2>
-        <p>Choose the British English voice for reading words and sentences</p>
+        <h2>Settings</h2>
+      </div>
+
+      <div className="category-pills" style={{ marginBottom: 20 }}>
+        <button className={`category-pill${settingsTab === 'voice' ? ' active' : ''}`} onClick={() => setSettingsTab('voice')}>🔊 Voice</button>
+        <button className={`category-pill${settingsTab === 'calendar' ? ' active' : ''}`} onClick={() => setSettingsTab('calendar')}>📅 Calendar</button>
+        <button className={`category-pill${settingsTab === 'prompts' ? ' active' : ''}`} onClick={() => setSettingsTab('prompts')}>💬 Prompts</button>
+      </div>
+
+      {settingsTab === 'calendar' && <Calendar />}
+
+      {settingsTab === 'prompts' && <PromptsEditor />}
+
+      {settingsTab === 'voice' && (<div>
+      <div style={{ marginBottom: 8 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 600 }}>Voice Selection</h3>
+        <p style={{ fontSize: 13, color: 'var(--text-muted)' }}>Choose the British English voice for reading words and sentences</p>
       </div>
 
       {saved && (
@@ -176,6 +269,7 @@ export default function Settings() {
           </div>
         ))}
       </div>
+      </div>)}
     </div>
   );
 }

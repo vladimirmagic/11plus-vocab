@@ -33,14 +33,34 @@ export function AuthProvider({ children }) {
     return data;
   }, []);
 
+  const loginWithGoogle = useCallback(async (credential) => {
+    const r = await fetch('/api/auth/google', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential }),
+    });
+    const text = await r.text();
+    let data;
+    try { data = JSON.parse(text); } catch { throw new Error('Server error - please try again'); }
+    if (!r.ok) throw new Error(data.error || 'Google login failed');
+    setToken(data.token);
+    setTokenState(data.token);
+    setUser(data.user);
+    return data;
+  }, []);
+
   const logout = useCallback(() => {
     clearToken();
     setTokenState(null);
     setUser(null);
   }, []);
 
+  const updateUser = useCallback((updates) => {
+    setUser(prev => prev ? { ...prev, ...updates } : prev);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ user, token, loading, loginWithName, logout }}>
+    <AuthContext.Provider value={{ user, token, loading, loginWithName, loginWithGoogle, logout, updateUser }}>
       {children}
     </AuthContext.Provider>
   );

@@ -2,9 +2,70 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
 import { LinkedText, useWords } from '../WordsContext.jsx';
+import { useGamification } from '../GamificationContext.jsx';
 
 let currentAudio = null;
 let currentProgressCleanup = null;
+
+function AddRelatedWord({ wordId, type, onAdded }) {
+  const [input, setInput] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [msg, setMsg] = useState('');
+
+  const handleAdd = async () => {
+    const w = input.trim();
+    if (!w) return;
+    setAdding(true);
+    setMsg('');
+    try {
+      const res = await apiFetch(`/words/${wordId}/add-related`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ word: w, type }),
+      });
+      if (res.created) {
+        setMsg(`✅ "${w}" added and full word page created!`);
+      } else if (res.message === 'Already exists') {
+        setMsg(`"${w}" was already listed.`);
+      } else {
+        setMsg(`✅ "${w}" added as ${type}!`);
+      }
+      setInput('');
+      onAdded(w);
+    } catch (err) {
+      setMsg('❌ Error: ' + (err.message || 'Failed'));
+    } finally {
+      setAdding(false);
+      setTimeout(() => setMsg(''), 4000);
+    }
+  };
+
+  return (
+    <div style={{ marginTop: 10, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+      <input
+        type="text"
+        value={input}
+        onChange={e => setInput(e.target.value)}
+        onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
+        placeholder={`Add a ${type}...`}
+        disabled={adding}
+        style={{
+          padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd',
+          fontSize: 13, width: 160, outline: 'none',
+        }}
+      />
+      <button
+        onClick={handleAdd}
+        disabled={adding || !input.trim()}
+        className="btn-primary"
+        style={{ padding: '6px 14px', fontSize: 13, opacity: adding ? 0.6 : 1 }}
+      >
+        {adding ? '...' : '+ Add'}
+      </button>
+      {msg && <span style={{ fontSize: 12, color: msg.startsWith('✅') ? '#4caf50' : msg.startsWith('❌') ? '#f44336' : '#888' }}>{msg}</span>}
+    </div>
+  );
+}
 
 function SpeakButton({ text, onProgress }) {
   const { user } = useAuth();
@@ -39,12 +100,20 @@ function SpeakButton({ text, onProgress }) {
       currentAudio = audio;
 
       if (onProgress) {
-        audio.ontimeupdate = () => {
-          if (audio.duration && audio.duration > 0) {
+        let rafId = null;
+        const tick = () => {
+          if (audio.duration && audio.duration > 0 && !audio.paused) {
             onProgress(audio.currentTime / audio.duration);
           }
+          if (!audio.paused && !audio.ended) {
+            rafId = requestAnimationFrame(tick);
+          }
         };
-        currentProgressCleanup = () => { if (onProgress) onProgress(null); };
+        audio.onplay = () => { rafId = requestAnimationFrame(tick); };
+        currentProgressCleanup = () => {
+          if (rafId) cancelAnimationFrame(rafId);
+          if (onProgress) onProgress(null);
+        };
       }
 
       audio.onended = () => {
@@ -135,11 +204,8 @@ function SpeakableText({ text, skipWord, progress, spokenOffset = 0, showTooltip
         const isLinked = entry && cleanWord !== skipLower;
 
         const hlStyle = isHighlighted ? {
-          backgroundColor: 'white',
-          borderRadius: 4,
-          padding: '1px 3px',
-          boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
-          transition: 'background-color 0.2s',
+          backgroundColor: '#FFF9C4',
+          borderRadius: 3,
         } : {};
 
         if (isLinked) {
@@ -251,17 +317,34 @@ function shuffleArray(arr) {
 
 function RelatedMatchingGame({ word }) {
   const [words, setWords] = useState([]);
-  const [shuffledDefs, setShuffledDefs] = useState([]);
+  const [shuffledRight, setShuffledRight] = useState([]);
   const [selectedWord, setSelectedWord] = useState(null);
   const [matchedIds, setMatchedIds] = useState(new Set());
   const [wrongPair, setWrongPair] = useState(null);
-  const [score, setScore] = useState(0);
-  const [streak, setStreak] = useState(0);
+  const [points, setPoints] = useState(0);
+  const [correct, setCorrect] = useState(0);
+  const [wrong, setWrong] = useState(0);
   const [timer, setTimer] = useState(0);
   const [gameActive, setGameActive] = useState(false);
   const [loading, setLoading] = useState(false);
   const [gameComplete, setGameComplete] = useState(false);
+  const [matchType, setMatchType] = useState('definition');
   const timerRef = useRef(null);
+
+  function buildPairs(items, type) {
+    if (type === 'synonyms') {
+      // Each word paired with its first synonym
+      return items.filter(w => w.synonyms && w.synonyms.length > 0).map(w => ({
+        id: w.id, left: w.word, right: w.synonyms[0],
+      }));
+    } else if (type === 'antonyms') {
+      return items.filter(w => w.antonyms && w.antonyms.length > 0).map(w => ({
+        id: w.id, left: w.word, right: w.antonyms[0],
+      }));
+    }
+    // definition
+    return items.map(w => ({ id: w.id, left: w.word, right: w.definition }));
+  }
 
   async function startGame() {
     setLoading(true);
@@ -269,14 +352,23 @@ function RelatedMatchingGame({ word }) {
     setMatchedIds(new Set());
     setSelectedWord(null);
     setWrongPair(null);
-    setScore(0);
-    setStreak(0);
+    setPoints(0);
+    setCorrect(0);
+    setWrong(0);
     setTimer(0);
     try {
       const data = await apiFetch(`/words/${word.id}/related-match`, { method: 'POST' });
       const items = data.words || [];
-      setWords(items);
-      setShuffledDefs(shuffleArray(items));
+      const pairs = buildPairs(items, matchType);
+      if (pairs.length < 2) {
+        // Fallback to definitions if not enough synonyms/antonyms
+        const fallback = buildPairs(items, 'definition');
+        setWords(fallback);
+        setShuffledRight(shuffleArray(fallback));
+      } else {
+        setWords(pairs);
+        setShuffledRight(shuffleArray(pairs));
+      }
       setGameActive(true);
     } catch (err) {
       console.error('Failed to fetch related words:', err);
@@ -296,33 +388,34 @@ function RelatedMatchingGame({ word }) {
     return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
   }
 
-  async function handleDefClick(defWord) {
-    if (!selectedWord || matchedIds.has(defWord.id) || wrongPair) return;
-    if (selectedWord.id === defWord.id) {
+  function handleRightClick(pair) {
+    if (!selectedWord || matchedIds.has(pair.id) || wrongPair) return;
+    if (selectedWord.id === pair.id) {
       const newMatched = new Set(matchedIds);
-      newMatched.add(defWord.id);
+      newMatched.add(pair.id);
       setMatchedIds(newMatched);
-      setScore(prev => prev + 1);
-      setStreak(prev => prev + 1);
+      setPoints(prev => prev + 1);
+      setCorrect(prev => prev + 1);
       setSelectedWord(null);
-      try { await apiFetch(`/progress/${defWord.id}`, { method: 'PUT', body: { status: 'mastered' } }); } catch {}
       if (newMatched.size === words.length) {
         setGameComplete(true);
         setGameActive(false);
         if (timerRef.current) clearInterval(timerRef.current);
       }
     } else {
-      setStreak(0);
-      setWrongPair({ wordId: selectedWord.id, defId: defWord.id });
-      try { await apiFetch(`/progress/${selectedWord.id}`, { method: 'PUT', body: { status: 'learning' } }); } catch {}
+      setPoints(prev => prev - 1);
+      setWrong(prev => prev + 1);
+      setWrongPair({ wordId: selectedWord.id, defId: pair.id });
       setTimeout(() => { setWrongPair(null); setSelectedWord(null); }, 500);
     }
   }
 
-  function handleWordClick(w) {
-    if (matchedIds.has(w.id) || wrongPair) return;
-    setSelectedWord(prev => (prev && prev.id === w.id ? null : w));
+  function handleLeftClick(pair) {
+    if (matchedIds.has(pair.id) || wrongPair) return;
+    setSelectedWord(prev => (prev && prev.id === pair.id ? null : pair));
   }
+
+  const typeLabels = { definition: 'Word → Definition', synonyms: 'Word → Synonym', antonyms: 'Word → Antonym' };
 
   if (!gameActive && !gameComplete) {
     return (
@@ -330,13 +423,15 @@ function RelatedMatchingGame({ word }) {
         <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 12 }}>
           Word Matching
         </h3>
-        <p style={{ fontSize: 15, marginBottom: 16, lineHeight: 1.5 }}>
-          Match <strong style={{ color: 'var(--green-dark)' }}>"{word.word}"</strong> and its related words to their definitions!
-        </p>
-        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 16 }}>
-          Includes synonyms, antonyms, similar words, and words from the same category.
-        </p>
-        <button className="btn-primary" onClick={startGame} disabled={loading}>
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'center', marginBottom: 16, flexWrap: 'wrap' }}>
+          {['definition', 'synonyms', 'antonyms'].map(t => (
+            <button key={t} className={matchType === t ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => setMatchType(t)} style={{ fontSize: 13, padding: '6px 14px' }}>
+              {typeLabels[t]}
+            </button>
+          ))}
+        </div>
+        <button className="btn-primary" onClick={startGame} disabled={loading} style={{ fontSize: 15, padding: '10px 24px' }}>
           {loading ? 'Loading...' : 'Start Matching'}
         </button>
       </div>
@@ -348,12 +443,18 @@ function RelatedMatchingGame({ word }) {
       <div className="game-header" style={{ marginBottom: 12 }}>
         <div className="game-score">
           <div className="score-item">
-            <span className="score-value">{score}/{words.length}</span>
-            <span className="score-label">Score</span>
+            <span className="score-value" style={{ color: points >= 0 ? 'var(--green, #4caf50)' : 'var(--red, #ef4444)' }}>
+              {points >= 0 ? '+' : ''}{points}
+            </span>
+            <span className="score-label">Points</span>
           </div>
           <div className="score-item">
-            <span className="score-value">{streak}</span>
-            <span className="score-label">Streak</span>
+            <span className="score-value" style={{ color: 'var(--green, #4caf50)' }}>{correct}</span>
+            <span className="score-label">Correct</span>
+          </div>
+          <div className="score-item">
+            <span className="score-value" style={{ color: wrong > 0 ? 'var(--red, #ef4444)' : 'inherit' }}>{wrong}</span>
+            <span className="score-label">Wrong</span>
           </div>
           <div className="score-item">
             <span className="score-value">{formatTime(timer)}</span>
@@ -364,43 +465,29 @@ function RelatedMatchingGame({ word }) {
 
       {gameComplete ? (
         <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
-          <h2>Well done!</h2>
-          <p>You matched all {words.length} words in {formatTime(timer)}!</p>
-          <button className="btn-primary" onClick={startGame} style={{ marginTop: 12 }}>
-            Play Again
+          <h2>{points === words.length ? '🎉 Perfect!' : 'Well done!'}</h2>
+          <p>Matched {words.length} pairs in {formatTime(timer)}</p>
+          <p style={{ fontSize: 18, fontWeight: 700, color: points >= 0 ? 'var(--green)' : 'var(--red)', marginTop: 8 }}>
+            {points >= 0 ? '+' : ''}{points} points ({correct} correct, {wrong} wrong)
+          </p>
+          <button className="btn-primary" onClick={() => { setGameActive(false); setGameComplete(false); }} style={{ marginTop: 12 }}>
+            Try Again
           </button>
         </div>
       ) : (
         <div className="game-board">
           <div className="game-column">
-            {words.map(w => (
-              <div
-                key={`word-${w.id}`}
-                className={
-                  'game-item' +
-                  (matchedIds.has(w.id) ? ' matched' : '') +
-                  (selectedWord && selectedWord.id === w.id ? ' selected' : '') +
-                  (wrongPair && wrongPair.wordId === w.id ? ' wrong' : '')
-                }
-                onClick={() => handleWordClick(w)}
-              >
-                {w.word}
-              </div>
+            {words.map(p => (
+              <div key={`left-${p.id}`}
+                className={'game-item' + (matchedIds.has(p.id) ? ' matched' : '') + (selectedWord && selectedWord.id === p.id ? ' selected' : '') + (wrongPair && wrongPair.wordId === p.id ? ' wrong' : '')}
+                onClick={() => handleLeftClick(p)}>{p.left}</div>
             ))}
           </div>
           <div className="game-column">
-            {shuffledDefs.map(w => (
-              <div
-                key={`def-${w.id}`}
-                className={
-                  'game-item' +
-                  (matchedIds.has(w.id) ? ' matched' : '') +
-                  (wrongPair && wrongPair.defId === w.id ? ' wrong' : '')
-                }
-                onClick={() => handleDefClick(w)}
-              >
-                {w.definition}
-              </div>
+            {shuffledRight.map(p => (
+              <div key={`right-${p.id}`}
+                className={'game-item' + (matchedIds.has(p.id) ? ' matched' : '') + (wrongPair && wrongPair.defId === p.id ? ' wrong' : '')}
+                onClick={() => handleRightClick(p)}>{p.right}</div>
             ))}
           </div>
         </div>
@@ -506,6 +593,7 @@ function SentenceExercise({ word }) {
   const [exerciseMode, setExerciseMode] = useState('free'); // 'free' | 'text' | 'picture'
   const [sentence, setSentence] = useState('');
   const [feedback, setFeedback] = useState(null);
+  const [freeWriteAttempts, setFreeWriteAttempts] = useState([]);
   const [submitting, setSubmitting] = useState(false);
   const [totalAttempts, setTotalAttempts] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
@@ -561,13 +649,26 @@ function SentenceExercise({ word }) {
     setSubmitting(true);
     setFeedback(null);
     try {
-      const data = await apiFetch('/games/validate-sentence', {
-        method: 'POST',
-        body: { wordId: word.id, sentence: sentence.trim() },
-      });
-      setTotalAttempts(prev => prev + 1);
-      if (data.correct) setCorrectCount(prev => prev + 1);
-      setFeedback(data);
+      if (exerciseMode === 'free') {
+        // Free write — save to database with full history
+        const data = await apiFetch(`/freewrite/${word.id}`, {
+          method: 'POST',
+          body: { sentence: sentence.trim() },
+        });
+        setFeedback(data);
+        if (data.attempt) {
+          setFreeWriteAttempts(prev => [...prev, data.attempt]);
+        }
+        setSentence('');
+        if (refreshGamification) refreshGamification();
+      } else {
+        // Text/Picture prompt — validate only, no persistent history
+        const data = await apiFetch('/games/validate-sentence', {
+          method: 'POST',
+          body: { wordId: word.id, sentence: sentence.trim() },
+        });
+        setFeedback(data);
+      }
     } catch (err) {
       console.error('Failed to validate sentence:', err);
       setFeedback({ correct: false, feedback: 'Something went wrong. Please try again.' });
@@ -663,7 +764,7 @@ function SentenceExercise({ word }) {
 
           <DictationTextarea
             value={sentence} onChange={setSentence}
-            placeholder={`Write a sentence using "${word.word}"...`}
+            placeholder={`Write a sentence using "${word.word}". Show that you understand what it means! Make sure the sentence is grammatically correct.`}
             recording={recording} setRecording={setRecording}
             transcribing={transcribing} setTranscribing={setTranscribing}
           />
@@ -674,6 +775,35 @@ function SentenceExercise({ word }) {
             </button>
             <button className="btn-secondary" onClick={handleReset}>Clear</button>
           </div>
+
+          {/* Free Write Attempt History */}
+          {freeWriteAttempts.length > 0 && (
+            <div style={{ marginTop: 16, borderTop: '1px solid var(--cream-dark, #e0d5c1)', paddingTop: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '1.5rem', marginBottom: 10, fontSize: 13 }}>
+                <span>Attempts: <strong>{freeWriteAttempts.length}</strong></span>
+                <span>Correct: <strong style={{ color: 'var(--green, #4caf50)' }}>{freeWriteAttempts.filter(a => a.correct).length}</strong></span>
+                <span>Points: <strong style={{ color: freeWriteAttempts.reduce((s, a) => s + (a.points || 0), 0) >= 0 ? 'var(--green, #4caf50)' : 'var(--red, #ef4444)' }}>
+                  {freeWriteAttempts.reduce((s, a) => s + (a.points || 0), 0) >= 0 ? '+' : ''}{freeWriteAttempts.reduce((s, a) => s + (a.points || 0), 0)}
+                </strong></span>
+              </div>
+              {freeWriteAttempts.slice().reverse().map((a) => (
+                <div key={a.id} style={{
+                  marginBottom: 8, padding: '10px 14px', borderRadius: 8, background: 'var(--cream, #f9f6f0)',
+                  borderLeft: `4px solid ${a.correct ? 'var(--green, #4caf50)' : 'var(--red, #ef4444)'}`,
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>#{a.attempt_number}</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: (a.points || 0) >= 0 ? 'var(--green, #4caf50)' : 'var(--red, #ef4444)' }}>
+                      {(a.points || 0) >= 0 ? '+' : ''}{a.points || 0} pts
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 14, fontStyle: 'italic', marginBottom: 6 }}>&ldquo;{a.sentence}&rdquo;</div>
+                  <div style={{ fontSize: 13, color: 'var(--text-muted)' }}>{a.feedback}</div>
+                  {a.suggestion && <div style={{ fontSize: 12, color: 'var(--purple, #8b5cf6)', marginTop: 4 }}>💡 {a.suggestion}</div>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -767,20 +897,12 @@ function SentenceExercise({ word }) {
         <RelatedMatchingGame word={word} />
       )}
 
-      {/* Shared feedback + stats */}
-      {feedback && (
+      {/* Latest feedback (for non-free-write exercises) */}
+      {feedback && exerciseMode !== 'free' && (
         <div className={`feedback-card ${feedback.correct ? 'correct' : 'incorrect'}`}>
           <p><strong>{feedback.correct ? 'Great job!' : 'Not quite right'}</strong></p>
           <p><LinkedText text={feedback.feedback} skipWord={word.word} /></p>
           {feedback.suggestion && <p><em>Suggestion: <LinkedText text={feedback.suggestion} skipWord={word.word} /></em></p>}
-        </div>
-      )}
-
-      {totalAttempts > 0 && (
-        <div className="card" style={{ textAlign: 'center', marginTop: 12, padding: '10px 16px' }}>
-          <p style={{ fontSize: 14, color: 'var(--text-muted)' }}>
-            Attempts: {totalAttempts} | Correct: {correctCount} | Accuracy: {Math.round((correctCount / totalAttempts) * 100)}%
-          </p>
         </div>
       )}
     </div>
@@ -790,6 +912,7 @@ function SentenceExercise({ word }) {
 // ── Main WordDetail Component ──
 export default function WordDetail({ wordId, onNavigate }) {
   const { user } = useAuth();
+  const { refresh: refreshGamification } = useGamification() || {};
   const [word, setWord] = useState(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(null);
@@ -840,23 +963,45 @@ export default function WordDetail({ wordId, onNavigate }) {
       })
       .catch(() => setWord(null))
       .finally(() => setLoading(false));
+    // Load free write attempts
+    apiFetch(`/freewrite/${wordId}`)
+      .then(data => setFreeWriteAttempts(data.attempts || []))
+      .catch(() => setFreeWriteAttempts([]));
   }, [wordId]);
 
-  // Generate images if not cached
+  // Auto-generate missing images one by one with progress
+  const [imageGenProgress, setImageGenProgress] = useState(''); // '' | 'Generating image 1 of 3...' etc
+  const imageGenRef = useRef(false);
   useEffect(() => {
-    if (!word) return;
+    if (!word || imageGenRef.current) return;
     const currentAnchors = Array.isArray(word.visual_anchors) ? word.visual_anchors : [];
     if (currentAnchors.length === 0) return;
-    if (currentAnchors.every(a => a.image_url)) return;
+    const missing = currentAnchors.map((a, i) => ({ ...a, idx: i })).filter(a => !a.image_url);
+    if (missing.length === 0) return;
 
+    imageGenRef.current = true;
     setImagesLoading(true);
-    apiFetch(`/words/${wordId}/generate-images`, { method: 'POST' })
-      .then(data => {
-        const updated = data.visual_anchors || [];
-        if (updated.length > 0) setAnchors(updated);
-      })
-      .catch(err => console.error('Image generation failed:', err))
-      .finally(() => setImagesLoading(false));
+
+    (async () => {
+      for (let mi = 0; mi < missing.length; mi++) {
+        const m = missing[mi];
+        setImageGenProgress(`Generating image ${mi + 1} of ${missing.length}...`);
+        try {
+          const data = await apiFetch(`/words/${wordId}/generate-single-anchor`, { method: 'POST', body: { anchorIndex: m.idx } });
+          if (data.image_url) {
+            setAnchors(prev => {
+              const updated = [...prev];
+              updated[m.idx] = { ...updated[m.idx], image_url: data.image_url };
+              return updated;
+            });
+          }
+        } catch (err) {
+          console.log(`Anchor ${m.idx} generation failed:`, err.message);
+        }
+      }
+      setImagesLoading(false);
+      setImageGenProgress('');
+    })();
   }, [word, wordId]);
 
   // Load user progress + favorite
@@ -908,8 +1053,38 @@ export default function WordDetail({ wordId, onNavigate }) {
     }
   }
 
-  function handleSynonymClick(syn) {
-    onNavigate('words', syn);
+  const [navigatingWord, setNavigatingWord] = useState(null);
+
+  async function handleSynonymClick(syn) {
+    setNavigatingWord(syn);
+    try {
+      // Search for the word in the database
+      const data = await apiFetch('/words?search=' + encodeURIComponent(syn) + '&limit=50');
+      const items = data.words || data;
+      const exact = items.find(w => w.word.toLowerCase() === syn.toLowerCase());
+      if (exact) {
+        // Word exists — navigate to it
+        setNavigatingWord(null);
+        onNavigate('word', exact.id);
+        return;
+      }
+
+      // Word doesn't exist — generate and create it in one call
+      const result = await apiFetch('/words/find-or-create', {
+        method: 'POST',
+        body: { word: syn },
+      });
+
+      setNavigatingWord(null);
+      if (result && result.word) {
+        onNavigate('word', result.word.id);
+      }
+    } catch (err) {
+      console.error('Failed to navigate to synonym:', err);
+      setNavigatingWord(null);
+      // Fallback: go to word list with search
+      onNavigate('words', syn);
+    }
   }
 
   if (loading) {
@@ -1035,27 +1210,35 @@ export default function WordDetail({ wordId, onNavigate }) {
               </div>
             )}
 
-            {word.synonyms && word.synonyms.length > 0 && (
-              <div className="card" style={{ marginBottom: 16 }}>
-                <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Synonyms (similar words)</h3>
-                <div className="tag-list">
-                  {word.synonyms.map((syn, idx) => (
-                    <span key={idx} className="synonym-tag" onClick={() => handleSynonymClick(syn)}>{syn}</span>
-                  ))}
-                </div>
+            {navigatingWord && (
+              <div className="card" style={{ marginBottom: 16, textAlign: 'center', padding: '1.5rem', background: 'var(--cream, #f9f6f0)' }}>
+                <div className="spinner" style={{ margin: '0 auto 8px' }}></div>
+                <p style={{ fontSize: 14, color: 'var(--text-muted)' }}>
+                  Loading <strong>{navigatingWord}</strong>...
+                  <br/><span style={{ fontSize: 12 }}>Creating word page if it doesn't exist yet</span>
+                </p>
               </div>
             )}
 
-            {word.antonyms && word.antonyms.length > 0 && (
-              <div className="card" style={{ marginBottom: 16 }}>
-                <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Antonyms (opposite words)</h3>
-                <div className="tag-list">
-                  {word.antonyms.map((ant, idx) => (
-                    <span key={idx} className="antonym-tag" onClick={() => handleSynonymClick(ant)}>{ant}</span>
-                  ))}
-                </div>
+            <div className="card" style={{ marginBottom: 16 }}>
+              <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Synonyms (similar words)</h3>
+              <div className="tag-list">
+                {(word.synonyms || []).map((syn, idx) => (
+                  <span key={idx} className={`synonym-tag${navigatingWord === syn ? ' loading-tag' : ''}`} onClick={() => !navigatingWord && handleSynonymClick(syn)} style={navigatingWord ? {opacity: 0.5, cursor: 'wait'} : {}}>{syn}</span>
+                ))}
               </div>
-            )}
+              <AddRelatedWord wordId={word.id} type="synonym" onAdded={(w) => setWord(prev => ({ ...prev, synonyms: [...(prev.synonyms || []), w] }))} />
+            </div>
+
+            <div className="card" style={{ marginBottom: 16 }}>
+              <h3 style={{ fontSize: 14, textTransform: 'uppercase', color: 'var(--text-muted)', fontWeight: 700, marginBottom: 8 }}>Antonyms (opposite words)</h3>
+              <div className="tag-list">
+                {(word.antonyms || []).map((ant, idx) => (
+                  <span key={idx} className={`antonym-tag${navigatingWord === ant ? ' loading-tag' : ''}`} onClick={() => !navigatingWord && handleSynonymClick(ant)} style={navigatingWord ? {opacity: 0.5, cursor: 'wait'} : {}}>{ant}</span>
+                ))}
+              </div>
+              <AddRelatedWord wordId={word.id} type="antonym" onAdded={(w) => setWord(prev => ({ ...prev, antonyms: [...(prev.antonyms || []), w] }))} />
+            </div>
 
             {/* Book Quotes */}
             <div className="card" style={{ marginBottom: 16 }}>
@@ -1113,9 +1296,9 @@ export default function WordDetail({ wordId, onNavigate }) {
                 <p style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 12 }}>Pick the image that helps you remember this word best!</p>
 
                 {imagesLoading && (
-                  <div style={{ textAlign: 'center', padding: 20, color: 'var(--text-muted)' }}>
+                  <div style={{ textAlign: 'center', padding: 16, color: 'var(--text-muted)', background: 'var(--cream)', borderRadius: 8, marginBottom: 12 }}>
                     <div className="spinner" style={{ margin: '0 auto 8px' }}></div>
-                    <p style={{ fontSize: 13 }}>Generating illustrations...</p>
+                    <p style={{ fontSize: 13 }}>{imageGenProgress || 'Generating illustrations...'}</p>
                   </div>
                 )}
 
@@ -1135,7 +1318,7 @@ export default function WordDetail({ wordId, onNavigate }) {
                       }}
                     >
                       {/* Image */}
-                      {anchor.image_url && !imageFailed[idx] && (
+                      {anchor.image_url && !imageFailed[idx] ? (
                         <div style={{ position: 'relative', width: '100%', height: 200, background: 'var(--cream-dark)', overflow: 'hidden' }}>
                           {!imageLoaded[idx] && (
                             <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: 13, zIndex: 1 }}>
@@ -1159,6 +1342,33 @@ export default function WordDetail({ wordId, onNavigate }) {
                               transition: 'opacity 0.3s',
                             }}
                           />
+                        </div>
+                      ) : (
+                        <div
+                          style={{ width: '100%', height: 160, background: 'var(--cream-dark)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, cursor: 'pointer' }}
+                          onClick={async (e) => {
+                            e.stopPropagation();
+                            const container = e.currentTarget;
+                            const statusEl = container.querySelector('.gen-status');
+                            if (statusEl) { statusEl.textContent = 'Generating...'; statusEl.style.color = 'var(--text-muted)'; }
+                            try {
+                              const data = await apiFetch(`/words/${word.id}/generate-single-anchor`, { method: 'POST', body: { anchorIndex: idx } });
+                              if (data.image_url) {
+                                setAnchors(prev => {
+                                  const updated = [...prev];
+                                  updated[idx] = { ...updated[idx], image_url: data.image_url };
+                                  return updated;
+                                });
+                                setImageFailed(prev => ({ ...prev, [idx]: false }));
+                                setImageLoaded(prev => ({ ...prev, [idx]: false }));
+                              }
+                            } catch (err) {
+                              if (statusEl) { statusEl.textContent = (err.message || 'Failed') + ' — tap to retry'; statusEl.style.color = 'var(--red, #ef4444)'; }
+                            }
+                          }}
+                        >
+                          <span style={{ fontSize: 36 }}>{anchor.emoji}</span>
+                          <span className="gen-status" style={{ fontSize: 12, color: 'var(--text-muted)' }}>🎨 Tap to generate image</span>
                         </div>
                       )}
 

@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { existsSync, mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from 'fs';
 import pool from './db.js';
 import { initDatabase } from './init-db.js';
 import { generateJwt, authMiddleware, adminMiddleware } from './auth.js';
@@ -309,7 +309,7 @@ app.post('/api/games/validate-sentence', authMiddleware, async (req, res) => {
     const msg = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 300,
-      messages: [{ role: 'user', content: `You are a friendly English teacher for 9-10 year old students preparing for the 11 Plus exam.\n\nA student has written a sentence using the word "${word.word}" (meaning: ${word.definition}).\n\nTheir sentence: "${sentence}"\n\nEvaluate:\n1. Is the word used correctly in context?\n2. Is the grammar correct?\n3. Does the sentence make sense?\n\nRespond in JSON format:\n{"correct": true/false, "feedback": "One short, encouraging sentence of feedback for a 9 year old", "suggestion": "If incorrect, a gentle suggestion for improvement. If correct, null"}` }]
+      messages: [{ role: 'user', content: `You are a friendly English teacher for 9-10 year old students preparing for the 11 Plus exam.\n\nA student has written a sentence using the word "${word.word}" (meaning: ${word.definition}).\n\nTheir sentence: "${sentence}"\n\nEvaluate:\n1. Is the word used correctly in context?\n2. Is the grammar correct?\n3. Does the sentence make sense?\n\nIMPORTANT: In your feedback and suggestion, do NOT provide example sentences that include the word "${word.word}". Give general tips only.\n\nRespond in JSON format:\n{"correct": true/false, "feedback": "One short, encouraging sentence of feedback for a 9 year old", "suggestion": "If incorrect, a gentle suggestion without example sentences. If correct, null"}` }]
     });
     const text = msg.content[0].text;
     const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -318,6 +318,254 @@ app.post('/api/games/validate-sentence', authMiddleware, async (req, res) => {
   } catch (err) {
     console.error('Validate sentence error:', err);
     res.status(500).json({ error: 'Failed to validate sentence' });
+  }
+});
+
+// ── Prompts Config ──
+const PROMPTS_FILE = join(__dirname, 'prompts-config.json');
+
+function getDefaultPrompts() {
+  return {
+    freewrite_evaluate: `You are a friendly, encouraging English teacher for a 9-10 year old student preparing for the 11 Plus exam.
+
+The student is practicing using the word "{{word}}" (meaning: {{definition}}).
+This is their attempt #{{attemptNumber}} for this word.
+
+Their sentence: "{{sentence}}"
+
+Evaluate:
+1. Is the word used correctly in context?
+2. Is the grammar correct?
+3. Does the sentence show understanding of the word?
+
+Be encouraging but honest. IMPORTANT: In your feedback and suggestion, do NOT write example sentences that include the word "{{word}}".
+
+Respond in JSON:
+{"correct": true/false, "feedback": "2-3 sentences of encouraging feedback", "suggestion": "A tip WITHOUT example sentences containing the word. If great, null", "points": <+20 correct, +30 excellent, -5 incorrect, +10 partial>}`,
+
+    validate_sentence: `You are a friendly English teacher for 9-10 year old students preparing for the 11 Plus exam.
+
+A student has written a sentence using the word "{{word}}" (meaning: {{definition}}).
+
+Their sentence: "{{sentence}}"
+
+Evaluate: Is the word used correctly? Is the grammar correct? Does it make sense?
+
+IMPORTANT: Do NOT provide example sentences that include the word "{{word}}".
+
+Respond in JSON:
+{"correct": true/false, "feedback": "One short encouraging sentence", "suggestion": "If incorrect, a gentle tip without examples. If correct, null"}`,
+
+    text_prompt: `You are helping a 10-year-old student practice vocabulary for the UK 11+ exam.
+
+The word is: "{{word}}" ({{definition}})
+
+Write a simple, short scenario in EXACTLY 3 sentences maximum. Describe a situation where the word "{{word}}" would be the perfect word to use. Do NOT use the word "{{word}}" anywhere. Keep it very simple — a 9-year-old must easily understand it.
+
+Return ONLY the scenario text, nothing else.`,
+
+    generate_word: `You are creating vocabulary content for 9-10 year old students studying for the 11 Plus exam.
+
+For the word "{{word}}", generate:
+1. A clear, simple definition suitable for a 9-10 year old
+2. An example sentence a child might encounter
+3. A teacher's tip about common mistakes
+4. 2-4 synonyms (simpler words preferred)
+5. 1-3 antonyms
+6. A category (adjectives/verbs/nouns/adverbs/emotions/character/academic/nature/relationships)
+7. Difficulty 1-3
+8. A single emoji
+9. Three visual anchors - each is an emoji + a vivid one-sentence scene
+
+Respond in JSON:
+{"definition":"...","example_sentence":"...","teacher_tip":"...","synonyms":["..."],"antonyms":["..."],"category":"...","difficulty":1,"visual_emoji":"...","visual_anchors":[{"emoji":"...","scene":"..."},{"emoji":"...","scene":"..."},{"emoji":"...","scene":"..."}]}`,
+  };
+}
+
+function loadPrompts() {
+  try {
+    if (existsSync(PROMPTS_FILE)) {
+      const saved = JSON.parse(readFileSync(PROMPTS_FILE, 'utf-8'));
+      const defaults = getDefaultPrompts();
+      return { ...defaults, ...saved };
+    }
+  } catch {}
+  return getDefaultPrompts();
+}
+
+let promptsConfig = loadPrompts();
+
+function getPrompt(key, vars) {
+  let tmpl = promptsConfig[key] || getDefaultPrompts()[key] || '';
+  for (const [k, v] of Object.entries(vars)) {
+    tmpl = tmpl.replace(new RegExp('\\{\\{' + k + '\\}\\}', 'g'), v);
+  }
+  return tmpl;
+}
+
+app.get('/api/prompts', authMiddleware, (req, res) => {
+  res.json(promptsConfig);
+});
+
+app.put('/api/prompts', authMiddleware, (req, res) => {
+  try {
+    promptsConfig = { ...getDefaultPrompts(), ...req.body };
+    writeFileSync(PROMPTS_FILE, JSON.stringify(promptsConfig, null, 2), 'utf-8');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to save prompts' });
+  }
+});
+
+app.post('/api/prompts/reset', authMiddleware, (req, res) => {
+  promptsConfig = getDefaultPrompts();
+  try { if (existsSync(PROMPTS_FILE)) unlinkSync(PROMPTS_FILE); } catch {}
+  res.json(promptsConfig);
+});
+
+// ── Find or Create Word ──
+app.post('/api/words/find-or-create', authMiddleware, async (req, res) => {
+  try {
+    const { word } = req.body;
+    if (!word || !word.trim()) return res.status(400).json({ error: 'word required' });
+    const clean = word.trim().toLowerCase();
+
+    // Check if exists
+    const existing = await pool.query('SELECT * FROM words WHERE LOWER(word) = $1 AND approved = true', [clean]);
+    if (existing.rows.length > 0) {
+      return res.json({ word: existing.rows[0], created: false });
+    }
+
+    // Generate with AI
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const anthropic = new Anthropic();
+    const msg = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 1000,
+      messages: [{ role: 'user', content: `You are creating vocabulary content for 9-10 year old students studying for the 11 Plus exam.\n\nFor the word "${clean}", generate:\n1. A clear, simple definition suitable for a 9-10 year old\n2. An example sentence a child might encounter\n3. A teacher's tip about common mistakes or subtle usage\n4. 2-4 synonyms (simpler words preferred)\n5. 1-3 antonyms\n6. A category (one of: adjectives, verbs, nouns, adverbs, emotions, character, academic, nature, relationships)\n7. Difficulty 1-3 (1=common, 2=intermediate, 3=advanced)\n8. A single emoji that represents the word\n9. Three "visual anchors" - each is an emoji + a vivid one-sentence scene\n\nRespond in JSON:\n{"definition":"...","example_sentence":"...","teacher_tip":"...","synonyms":["..."],"antonyms":["..."],"category":"...","difficulty":1,"visual_emoji":"...","visual_anchors":[{"emoji":"...","scene":"..."},{"emoji":"...","scene":"..."},{"emoji":"...","scene":"..."}]}` }]
+    });
+    const text = msg.content[0].text;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return res.status(500).json({ error: 'Failed to generate word content' });
+
+    const gen = JSON.parse(jsonMatch[0]);
+    const insertResult = await pool.query(`
+      INSERT INTO words (word, definition, example_sentence, teacher_tip, synonyms, antonyms, category, difficulty, visual_emoji, visual_anchors, approved)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true)
+      ON CONFLICT (word) DO UPDATE SET
+        definition = EXCLUDED.definition,
+        example_sentence = EXCLUDED.example_sentence,
+        teacher_tip = EXCLUDED.teacher_tip,
+        synonyms = EXCLUDED.synonyms,
+        antonyms = EXCLUDED.antonyms,
+        category = EXCLUDED.category,
+        difficulty = EXCLUDED.difficulty,
+        visual_emoji = EXCLUDED.visual_emoji,
+        visual_anchors = EXCLUDED.visual_anchors,
+        approved = true
+      RETURNING *
+    `, [clean, gen.definition, gen.example_sentence, gen.teacher_tip, gen.synonyms || [], gen.antonyms || [], gen.category, gen.difficulty || 1, gen.visual_emoji, JSON.stringify(gen.visual_anchors || [])]);
+
+    res.json({ word: insertResult.rows[0], created: true });
+  } catch (err) {
+    console.error('Find or create word error:', err);
+    res.status(500).json({ error: 'Failed to find or create word' });
+  }
+});
+
+// ── Free Write Attempts ──
+app.get('/api/freewrite/:wordId', authMiddleware, async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT * FROM free_write_attempts WHERE user_id = $1 AND word_id = $2 ORDER BY attempt_number ASC',
+      [req.user.userId, req.params.wordId]
+    );
+    res.json({ attempts: result.rows });
+  } catch (err) {
+    console.error('Fetch attempts error:', err);
+    res.status(500).json({ error: 'Failed to fetch attempts' });
+  }
+});
+
+app.post('/api/freewrite/:wordId', authMiddleware, async (req, res) => {
+  try {
+    const { sentence } = req.body;
+    if (!sentence || !sentence.trim()) return res.status(400).json({ error: 'sentence required' });
+
+    const wordId = parseInt(req.params.wordId);
+    const wordResult = await pool.query('SELECT word, definition FROM words WHERE id = $1', [wordId]);
+    if (wordResult.rows.length === 0) return res.status(404).json({ error: 'Word not found' });
+    const word = wordResult.rows[0];
+
+    // Get attempt number
+    const countResult = await pool.query(
+      'SELECT COUNT(*) as cnt FROM free_write_attempts WHERE user_id = $1 AND word_id = $2',
+      [req.user.userId, wordId]
+    );
+    const attemptNumber = parseInt(countResult.rows[0].cnt) + 1;
+
+    // Validate with Claude
+    const Anthropic = (await import('@anthropic-ai/sdk')).default;
+    const anthropic = new Anthropic();
+    const msg = await anthropic.messages.create({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 400,
+      messages: [{ role: 'user', content: `You are a friendly, encouraging English teacher for a 9-10 year old student preparing for the 11 Plus exam.
+
+The student is practicing using the word "${word.word}" (meaning: ${word.definition}).
+This is their attempt #${attemptNumber} for this word.
+
+Their sentence: "${sentence.trim()}"
+
+Evaluate:
+1. Is the word used correctly in context?
+2. Is the grammar correct?
+3. Does the sentence show understanding of the word?
+4. Is this an improvement over what a typical attempt might look like?
+
+Be encouraging but honest. If this is attempt #${attemptNumber}, acknowledge their persistence.
+
+IMPORTANT: In your feedback and suggestion, do NOT write example sentences that include the word "${word.word}". The student must come up with their own sentence. You can give general tips about sentence structure or meaning, but never give away example answers.
+
+Respond in JSON:
+{"correct": true/false, "feedback": "2-3 sentences of encouraging, specific feedback for a 9 year old", "suggestion": "If not perfect, a specific tip WITHOUT example sentences containing the word. If great, null", "points": <number: +20 for correct use, +30 for excellent creative use, -5 for incorrect use, +10 for partially correct>}` }]
+    });
+    const text = msg.content[0].text;
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    const result = jsonMatch ? JSON.parse(jsonMatch[0]) : { correct: false, feedback: 'Could not evaluate', suggestion: 'Please try again', points: 0 };
+
+    // Save attempt
+    const insertResult = await pool.query(
+      `INSERT INTO free_write_attempts (user_id, word_id, sentence, correct, feedback, suggestion, points, attempt_number)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [req.user.userId, wordId, sentence.trim(), result.correct, result.feedback, result.suggestion, result.points || 0, attemptNumber]
+    );
+
+    // Record points
+    if (result.points && result.points !== 0) {
+      await pool.query(
+        'INSERT INTO point_events (user_id, points, reason) VALUES ($1, $2, $3)',
+        [req.user.userId, result.points, 'freewrite_' + (result.correct ? 'correct' : 'attempt')]
+      );
+    }
+
+    // Also record in exercise_history for gamification
+    const { randomUUID } = await import('crypto');
+    const sessionId = randomUUID();
+    await pool.query(
+      `INSERT INTO exercise_history (user_id, word_id, exercise_type, correct, points_earned, session_id, metadata)
+       VALUES ($1, $2, 'freewrite', $3, $4, $5, $6)`,
+      [req.user.userId, wordId, result.correct, result.points || 0, sessionId, JSON.stringify({ sentence: sentence.trim(), attempt: attemptNumber })]
+    );
+
+    res.json({
+      attempt: insertResult.rows[0],
+      ...result,
+      attemptNumber,
+    });
+  } catch (err) {
+    console.error('Free write error:', err);
+    res.status(500).json({ error: 'Failed to process sentence' });
   }
 });
 
@@ -445,6 +693,99 @@ app.post('/api/admin/upload', authMiddleware, adminMiddleware, uploadHandler.sin
   }
 });
 
+// ── Add synonym/antonym (auto-creates missing words) ──
+app.post('/api/words/:id/add-related', authMiddleware, async (req, res) => {
+  try {
+    const { word: newWord, type } = req.body; // type: 'synonym' or 'antonym'
+    if (!newWord || !type) return res.status(400).json({ error: 'word and type required' });
+    if (!['synonym', 'antonym'].includes(type)) return res.status(400).json({ error: 'type must be synonym or antonym' });
+
+    const clean = newWord.trim().toLowerCase();
+    if (!clean) return res.status(400).json({ error: 'empty word' });
+
+    // Get the source word
+    const srcResult = await pool.query('SELECT * FROM words WHERE id = $1', [req.params.id]);
+    if (srcResult.rows.length === 0) return res.status(404).json({ error: 'Source word not found' });
+    const srcWord = srcResult.rows[0];
+
+    // Add to source word's synonym/antonym array
+    const col = type === 'synonym' ? 'synonyms' : 'antonyms';
+    const existing = srcWord[col] || [];
+    if (existing.map(w => w.toLowerCase()).includes(clean)) {
+      return res.json({ message: 'Already exists', created: false });
+    }
+    await pool.query(
+      `UPDATE words SET ${col} = array_append(${col}, $1) WHERE id = $2`,
+      [clean, req.params.id]
+    );
+
+    // Check if the word exists in database
+    const existCheck = await pool.query('SELECT id FROM words WHERE LOWER(word) = $1', [clean]);
+    let created = false;
+    let generatedWord = null;
+
+    if (existCheck.rows.length === 0) {
+      // Word doesn't exist — generate it with AI
+      try {
+        const Anthropic = (await import('@anthropic-ai/sdk')).default;
+        const anthropic = new Anthropic();
+        const msg = await anthropic.messages.create({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          messages: [{ role: 'user', content: `You are creating vocabulary content for 9-10 year old students studying for the 11 Plus exam (UK).
+
+For the word "${clean}", generate vocabulary content. This word was added as a ${type} of "${srcWord.word}".
+
+Generate:
+1. A clear, simple definition suitable for a 9-10 year old
+2. An example sentence a child might encounter
+3. A teacher's tip about common mistakes or subtle usage
+4. 2-4 synonyms (must include "${srcWord.word}" since it's a ${type === 'synonym' ? 'synonym' : 'related word'})
+5. 1-3 antonyms${type === 'antonym' ? ` (must include "${srcWord.word}")` : ''}
+6. A category (one of: adjectives, verbs, nouns, adverbs, emotions, character, academic, nature, relationships)
+7. Difficulty 1-3 (1=common, 2=intermediate, 3=advanced)
+8. A single emoji that represents the word
+9. Three "visual anchors" - each is an emoji + a vivid one-sentence scene
+
+Respond in JSON only:
+{"definition":"...","example_sentence":"...","teacher_tip":"...","synonyms":["..."],"antonyms":["..."],"category":"...","difficulty":1,"visual_emoji":"...","visual_anchors":[{"emoji":"...","scene":"..."},{"emoji":"...","scene":"..."},{"emoji":"...","scene":"..."}]}` }]
+        });
+        const text = msg.content[0].text;
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const gen = JSON.parse(jsonMatch[0]);
+          await pool.query(`
+            INSERT INTO words (word, definition, example_sentence, teacher_tip, synonyms, antonyms, category, difficulty, visual_emoji, visual_anchors, approved)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true) ON CONFLICT (word) DO NOTHING
+          `, [clean, gen.definition, gen.example_sentence, gen.teacher_tip, gen.synonyms || [], gen.antonyms || [], gen.category, gen.difficulty || 1, gen.visual_emoji, JSON.stringify(gen.visual_anchors || [])]);
+          created = true;
+          generatedWord = { word: clean, ...gen };
+        }
+      } catch (aiErr) {
+        console.error('AI generation error for related word:', aiErr.message);
+        // Still succeed — the synonym/antonym was added, just not auto-generated
+      }
+    } else {
+      // Word exists — add reverse link
+      const reverseCol = type === 'synonym' ? 'synonyms' : 'antonyms';
+      const reverseWord = srcWord.word.toLowerCase();
+      await pool.query(
+        `UPDATE words SET ${reverseCol} = array_append(${reverseCol}, $1) WHERE LOWER(word) = $2 AND NOT ($1 = ANY(${reverseCol}))`,
+        [reverseWord, clean]
+      );
+    }
+
+    res.json({
+      message: `Added ${clean} as ${type}`,
+      created,
+      generatedWord,
+    });
+  } catch (err) {
+    console.error('Add related error:', err);
+    res.status(500).json({ error: 'Failed to add related word' });
+  }
+});
+
 // ── Image Generation for Visual Anchors ──
 app.post('/api/words/:id/generate-images', async (req, res) => {
   try {
@@ -464,7 +805,7 @@ app.post('/api/words/:id/generate-images', async (req, res) => {
     for (let idx = 0; idx < anchors.length; idx++) {
       const anchor = anchors[idx];
       if (anchor.image_url) continue; // Already generated, skip
-      const prompt = `Watercolor illustration for children, soft pastel colors, whimsical style: ${anchor.scene}`;
+      const prompt = `Watercolor illustration for children, soft pastel colors, whimsical style. The word "${word.word}" is illustrated: ${anchor.scene}. Include the word "${word.word}" written in friendly handwritten text in the image.`;
 
       try {
         const imageBuffer = await generateImageWithImagen(prompt);
@@ -489,6 +830,38 @@ app.post('/api/words/:id/generate-images', async (req, res) => {
   } catch (err) {
     console.error('Generate images error:', err);
     res.status(500).json({ error: 'Failed to generate images' });
+  }
+});
+
+// ── Generate Single Anchor Image ──
+app.post('/api/words/:id/generate-single-anchor', async (req, res) => {
+  try {
+    const { anchorIndex } = req.body;
+    if (anchorIndex === undefined) return res.status(400).json({ error: 'anchorIndex required' });
+
+    const wordResult = await pool.query('SELECT * FROM words WHERE id = $1 AND approved = true', [req.params.id]);
+    if (wordResult.rows.length === 0) return res.status(404).json({ error: 'Word not found' });
+
+    const word = wordResult.rows[0];
+    let anchors = Array.isArray(word.visual_anchors) ? word.visual_anchors : [];
+    if (anchorIndex >= anchors.length) return res.status(400).json({ error: 'Invalid anchor index' });
+
+    const anchor = anchors[anchorIndex];
+    const prompt = `Watercolor illustration for children, soft pastel colors, whimsical style: ${anchor.scene}`;
+
+    const imageBuffer = await generateImageWithImagen(prompt);
+    const filename = `word-${word.id}-anchor-${anchorIndex}-${Date.now()}.png`;
+    const filepath = join(imagesDir, filename);
+    writeFileSync(filepath, imageBuffer);
+
+    anchors[anchorIndex] = { ...anchor, image_url: `/images/${filename}` };
+    await pool.query('UPDATE words SET visual_anchors = $1 WHERE id = $2', [JSON.stringify(anchors), word.id]);
+
+    console.log(`Generated single anchor image for word ${word.id} anchor ${anchorIndex}`);
+    res.json({ image_url: `/images/${filename}` });
+  } catch (err) {
+    console.error('Generate single anchor error:', err);
+    res.status(500).json({ error: 'Failed to generate image: ' + err.message });
   }
 });
 
@@ -536,14 +909,12 @@ app.post('/api/words/:id/text-prompt', authMiddleware, async (req, res) => {
     const anthropic = new Anthropic();
     const msg = await anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 200,
+      max_tokens: 120,
       messages: [{ role: 'user', content: `You are helping a 10-year-old student practice vocabulary for the UK 11+ exam.
 
 The word is: "${word.word}" (${word.definition})${personalisation}
 
-Write a short, vivid scenario (2-3 sentences) describing a situation where the word "${word.word}" would be the perfect word to use. Do NOT use the word "${word.word}" anywhere in the scenario — the student must figure out the word fits and rewrite the scenario using it.
-
-Write at a level appropriate for a 9-10 year old. Make the scenario relatable and interesting for a child.
+Write a simple, short scenario in EXACTLY 3 sentences maximum. Describe a situation where the word "${word.word}" would be the perfect word to use. Do NOT use the word "${word.word}" anywhere. Keep it very simple — a 9-year-old must easily understand it. Use short, clear sentences.
 
 Return ONLY the scenario text, nothing else.` }],
     });

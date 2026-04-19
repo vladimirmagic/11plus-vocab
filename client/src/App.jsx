@@ -7,7 +7,7 @@ import GrowthTree from './GrowthTree.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import WordList from './pages/WordList.jsx';
 import WordDetail from './pages/WordDetail.jsx';
-import WordClusters from './pages/WordClusters.jsx';
+// WordClusters removed
 import AdminPanel from './pages/AdminPanel.jsx';
 import Settings from './pages/Settings.jsx';
 import Calendar from './pages/Calendar.jsx';
@@ -19,10 +19,7 @@ import Help from './pages/Help.jsx';
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
-  { id: 'calendar', label: 'Calendar', icon: '📅' },
-  { id: 'leaderboard', label: 'Leaderboard', icon: '🏆' },
   { id: 'words', label: 'Word List', icon: '📚' },
-  { id: 'clusters', label: 'Word Clusters', icon: '🕸️' },
   { id: 'profile', label: 'My Profile', icon: '👤' },
   { id: 'help', label: 'How It Works', icon: '❓' },
   { id: 'settings', label: 'Settings', icon: '🔧' },
@@ -208,7 +205,7 @@ export default function App() {
       case 'leaderboard': return <Leaderboard />;
       case 'matching': return <MatchingGame />;
       case 'sentence': return <SentenceBuilder />;
-      case 'clusters': return <WordClusters />;
+      // clusters removed
       case 'profile': return <Profile />;
       case 'help': return <Help />;
       case 'settings': return <Settings />;

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { apiFetch } from '../api.js';
 import { useAuth } from '../AuthContext.jsx';
 import { useGamification } from '../GamificationContext.jsx';
+import Leaderboard from './Leaderboard.jsx';
 
 function formatDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -307,13 +308,11 @@ function Dashboard({ onNavigate }) {
           <button className="btn-primary" onClick={() => onNavigate('words')}>
             📚 Browse Words
           </button>
-          <button className="btn-primary" onClick={() => onNavigate('calendar')}>
-            📅 Learning Calendar
-          </button>
-          <button className="btn-primary" onClick={() => onNavigate('clusters')}>
-            🕸️ Word Clusters
-          </button>
         </div>
+      </div>
+
+      <div style={{ marginTop: '1.5rem' }}>
+        <Leaderboard />
       </div>
     </div>
   );

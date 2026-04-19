@@ -125,6 +125,20 @@ CREATE TABLE IF NOT EXISTS point_events (
 );
 CREATE INDEX IF NOT EXISTS idx_points_user_date ON point_events(user_id, created_at);
 
+CREATE TABLE IF NOT EXISTS free_write_attempts (
+  id SERIAL PRIMARY KEY,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  word_id INTEGER NOT NULL REFERENCES words(id) ON DELETE CASCADE,
+  sentence TEXT NOT NULL,
+  correct BOOLEAN NOT NULL,
+  feedback TEXT,
+  suggestion TEXT,
+  points INTEGER NOT NULL DEFAULT 0,
+  attempt_number INTEGER NOT NULL DEFAULT 1,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_freewrite_user_word ON free_write_attempts(user_id, word_id);
+
 CREATE TABLE IF NOT EXISTS achievements (
   id SERIAL PRIMARY KEY,
   key VARCHAR(50) UNIQUE NOT NULL,
