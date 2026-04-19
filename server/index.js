@@ -1606,6 +1606,121 @@ app.get('/api/exercises/sessions', authMiddleware, async (req, res) => {
   }
 });
 
+// ── Parent view endpoints ──
+app.get('/api/parent/sessions', authMiddleware, async (req, res) => {
+  try {
+    const { limit = 20, offset = 0 } = req.query;
+    const sessions = await pool.query(`
+      SELECT
+        session_id,
+        MIN(created_at) as started_at,
+        MAX(created_at) as ended_at,
+        COUNT(*)::int as total_exercises,
+        COUNT(*) FILTER (WHERE correct)::int as correct_count,
+        SUM(points_earned)::int as total_points,
+        array_agg(DISTINCT exercise_type) as exercise_types
+      FROM exercise_history
+      WHERE user_id = $1
+      GROUP BY session_id
+      ORDER BY MIN(created_at) DESC
+      LIMIT $2 OFFSET $3
+    `, [req.user.userId, parseInt(limit), parseInt(offset)]);
+
+    // For each session, get the full exercise details
+    const sessionsWithDetails = await Promise.all(sessions.rows.map(async (session) => {
+      const details = await pool.query(`
+        SELECT eh.*, w.word, w.visual_emoji, w.definition
+        FROM exercise_history eh
+        JOIN words w ON w.id = eh.word_id
+        WHERE eh.user_id = $1 AND eh.session_id = $2
+        ORDER BY eh.created_at ASC
+      `, [req.user.userId, session.session_id]);
+      return { ...session, exercises: details.rows };
+    }));
+
+    const countResult = await pool.query(
+      'SELECT COUNT(DISTINCT session_id)::int as total FROM exercise_history WHERE user_id = $1',
+      [req.user.userId]
+    );
+
+    res.json({ sessions: sessionsWithDetails, total: countResult.rows[0].total });
+  } catch (err) {
+    console.error('Parent sessions error:', err);
+    res.status(500).json({ error: 'Failed to fetch sessions' });
+  }
+});
+
+app.get('/api/parent/freewrite-log', authMiddleware, async (req, res) => {
+  try {
+    const { limit = 50, offset = 0 } = req.query;
+    const result = await pool.query(`
+      SELECT fwa.*, w.word, w.visual_emoji, w.definition
+      FROM free_write_attempts fwa
+      JOIN words w ON w.id = fwa.word_id
+      WHERE fwa.user_id = $1
+      ORDER BY fwa.created_at DESC
+      LIMIT $2 OFFSET $3
+    `, [req.user.userId, parseInt(limit), parseInt(offset)]);
+    const countResult = await pool.query(
+      'SELECT COUNT(*)::int as total FROM free_write_attempts WHERE user_id = $1',
+      [req.user.userId]
+    );
+    res.json({ attempts: result.rows, total: countResult.rows[0].total });
+  } catch (err) {
+    console.error('Parent freewrite log error:', err);
+    res.status(500).json({ error: 'Failed to fetch freewrite log' });
+  }
+});
+
+app.get('/api/parent/weekly-progress', authMiddleware, async (req, res) => {
+  try {
+    // Words mastered per week for last 8 weeks
+    const result = await pool.query(`
+      SELECT
+        date_trunc('week', last_practiced)::date as week_start,
+        COUNT(*) FILTER (WHERE status = 'mastered')::int as mastered,
+        COUNT(*) FILTER (WHERE status = 'learning')::int as learning,
+        COUNT(*)::int as total_practiced
+      FROM progress
+      WHERE user_id = $1 AND last_practiced >= NOW() - INTERVAL '8 weeks'
+      GROUP BY date_trunc('week', last_practiced)
+      ORDER BY week_start ASC
+    `, [req.user.userId]);
+
+    // Accuracy this week
+    const accuracy = await pool.query(`
+      SELECT
+        COUNT(*)::int as total,
+        COUNT(*) FILTER (WHERE correct)::int as correct
+      FROM exercise_history
+      WHERE user_id = $1 AND created_at >= date_trunc('week', NOW())
+    `, [req.user.userId]);
+
+    // Most and least accurate words
+    const wordAccuracy = await pool.query(`
+      SELECT w.word, w.visual_emoji,
+        COUNT(*)::int as attempts,
+        COUNT(*) FILTER (WHERE eh.correct)::int as correct,
+        ROUND(100.0 * COUNT(*) FILTER (WHERE eh.correct) / NULLIF(COUNT(*), 0))::int as accuracy_pct
+      FROM exercise_history eh
+      JOIN words w ON w.id = eh.word_id
+      WHERE eh.user_id = $1
+      GROUP BY w.id, w.word, w.visual_emoji
+      HAVING COUNT(*) >= 2
+      ORDER BY accuracy_pct ASC
+    `, [req.user.userId]);
+
+    res.json({
+      weeklyProgress: result.rows,
+      weekAccuracy: accuracy.rows[0] || { total: 0, correct: 0 },
+      wordAccuracy: wordAccuracy.rows,
+    });
+  } catch (err) {
+    console.error('Parent weekly progress error:', err);
+    res.status(500).json({ error: 'Failed to fetch weekly progress' });
+  }
+});
+
 // 5. GET /api/points/today — today's earned/lost/target
 app.get('/api/points/today', authMiddleware, async (req, res) => {
   try {

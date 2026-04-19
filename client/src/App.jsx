@@ -16,6 +16,7 @@ import Leaderboard from './pages/Leaderboard.jsx';
 import MatchingGame from './pages/MatchingGame.jsx';
 import SentenceBuilder from './pages/SentenceBuilder.jsx';
 import Help from './pages/Help.jsx';
+import ParentDashboard from './pages/ParentDashboard.jsx';
 
 const NAV_ITEMS = [
   { id: 'dashboard', label: 'Dashboard', icon: '🏠' },
@@ -174,6 +175,7 @@ export default function App() {
   const [tab, setTab] = useState('dashboard');
   const [tabParam, setTabParam] = useState(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [parentView, setParentView] = useState(false);
 
   const handleNavigate = useCallback((newTab, param) => {
     setTab(newTab);
@@ -197,6 +199,9 @@ export default function App() {
   const navItems = user.role === 'admin' ? [...NAV_ITEMS, ADMIN_NAV] : NAV_ITEMS;
 
   const renderPage = () => {
+    if (parentView) {
+      return <ParentDashboard onNavigate={handleNavigate} />;
+    }
     switch (tab) {
       case 'dashboard': return <Dashboard onNavigate={handleNavigate} />;
       case 'words': return <WordList onNavigate={handleNavigate} initialSearch={tabParam || ''} />;
@@ -241,7 +246,7 @@ export default function App() {
         </div>
 
         <div className="nav-items">
-          {navItems.map(item => (
+          {!parentView && navItems.map(item => (
             <div
               key={item.id}
               className={`nav-item ${tab === item.id || (item.id === 'words' && tab === 'word') ? 'active' : ''}`}
@@ -251,6 +256,30 @@ export default function App() {
               {item.label}
             </div>
           ))}
+          {parentView && (
+            <div className="nav-item active">
+              <span className="nav-icon">👨‍👩‍👧</span>
+              Parent Dashboard
+            </div>
+          )}
+        </div>
+
+        {/* Parent/Student view toggle */}
+        <div
+          onClick={() => { setParentView(!parentView); setSidebarOpen(false); }}
+          style={{
+            padding: '12px 20px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
+            borderTop: '1px solid var(--cream-dark, #e0d5c1)',
+            borderBottom: '1px solid var(--cream-dark, #e0d5c1)',
+            fontSize: 14, fontWeight: 700, transition: 'background 0.2s',
+            color: parentView ? 'var(--green-dark)' : 'var(--text-muted)',
+            background: parentView ? 'var(--cream)' : 'transparent',
+          }}
+          onMouseOver={e => e.currentTarget.style.background = 'var(--cream)'}
+          onMouseOut={e => e.currentTarget.style.background = parentView ? 'var(--cream)' : 'transparent'}
+        >
+          <span style={{ fontSize: 18 }}>{parentView ? '👤' : '👨‍👩‍👧'}</span>
+          {parentView ? 'Back to Student View' : 'Parent View'}
         </div>
 
         {/* Gamification widgets */}
